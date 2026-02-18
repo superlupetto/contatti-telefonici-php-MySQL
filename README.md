@@ -1,4 +1,3 @@
-# contatti
 # 📇 Google-Style Contact Manager
 
 Un'applicazione web self-hosted, leggera e moderna per la gestione dei contatti. Il design è ispirato a Google Contacts, offrendo un'esperienza utente fluida con visualizzazione a schede e gestione completa dei dati.
