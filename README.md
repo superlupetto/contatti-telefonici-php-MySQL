@@ -24,6 +24,16 @@ Un'applicazione web self-hosted, leggera e moderna per la gestione dei contatti.
 
 ---
 
+1. Clonazione o Copia
+Copia il file index.php nella cartella root del tuo server web (es. /var/www/html/).
+
+2. Configurazione Permessi (Fondamentale)
+Per permettere a PHP di scrivere i dati e salvare le immagini, assegna la proprietà della cartella all'utente del web server:
+
+  sudo chown -R www-data:www-data /var/www/html/
+  
+  sudo chmod -R 755 /var/www/html/
+
 ## 📂 Struttura del Progetto
 
 ```text
@@ -33,12 +43,3 @@ Un'applicazione web self-hosted, leggera e moderna per la gestione dei contatti.
 └── uploadslist/          # Directory creata automaticamente
     ├── contatti.json     # Il "database" dei contatti
     └── *.jpg/png         # Immagini del profilo caricate
-
-1. Clonazione o Copia
-Copia il file index.php nella cartella root del tuo server web (es. /var/www/html/).
-
-2. Configurazione Permessi (Fondamentale)
-Per permettere a PHP di scrivere i dati e salvare le immagini, assegna la proprietà della cartella all'utente del web server:
-
-    sudo chown -R www-data:www-data /var/www/html/
-    sudo chmod -R 755 /var/www/html/
