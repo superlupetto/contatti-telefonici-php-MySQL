@@ -34,6 +34,27 @@ Per permettere a PHP di scrivere i dati e salvare le immagini, assegna la propri
   
   sudo chmod -R 755 /var/www/html/
 
+3. Personalizzazione Password
+Apri index.php e modifica la variabile alla riga 5:
+
+📖 Guida all'uso
+Login: Accedi con la password impostata (Default: nome).
+
+Crea: Clicca sul pulsante + o Crea contatto.
+
+Visualizza: Clicca su qualsiasi riga della lista per aprire la scheda profilo.
+
+Modifica: All'interno della scheda profilo, clicca sull'icona della matita (✎).
+
+Elimina: Usa l'icona del cestino (🗑️) nella vista dettaglio o nella lista rapida.
+
+🔒 Sicurezza e Privacy
+Dati Locali: Tutti i contatti e le immagini risiedono esclusivamente sul tuo server.
+
+Pulizia Automatica: Quando elimini un contatto o cambi una foto, il sistema elimina automaticamente i vecchi file dal server per evitare spreco di spazio.
+
+Creato per gestire i tuoi contatti in modo rapido, privato e senza dipendenze esterne.
+
 ## 📂 Struttura del Progetto
 
 ```text
