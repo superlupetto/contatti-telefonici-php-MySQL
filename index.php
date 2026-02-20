@@ -2,10 +2,57 @@
 session_start();
 
 /* =========================
+   0) CONFIG PASSWORD (hash su file)
+========================= */
+$upload_dir = __DIR__ . '/uploadslist/';
+$upload_url = 'uploadslist/';
+
+if (!is_dir($upload_dir)) @mkdir($upload_dir, 0777, true);
+
+$pass_file = $upload_dir . 'admin_pass.json';
+
+/**
+ * Password di bootstrap (solo per la PRIMA migrazione).
+ * Dopo che esiste admin_pass.json, non viene più usata.
+ */
+$bootstrap_password_plain = "nome";
+
+/**
+ * Legge hash password da file.
+ */
+function load_admin_hash($pass_file) {
+  if (!file_exists($pass_file)) return null;
+  $raw = file_get_contents($pass_file);
+  $data = json_decode($raw, true);
+  if (!is_array($data)) return null;
+  $hash = $data['hash'] ?? null;
+  return is_string($hash) && $hash !== '' ? $hash : null;
+}
+
+/**
+ * Salva hash password su file.
+ */
+function save_admin_hash($pass_file, $hash) {
+  $payload = [
+    'algo' => 'password_hash',
+    'hash' => $hash,
+    'updated_at' => date('c'),
+  ];
+  file_put_contents($pass_file, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+}
+
+/**
+ * Migrazione automatica: se non esiste file hash, crea hash da bootstrap_password_plain.
+ */
+$stored_hash = load_admin_hash($pass_file);
+if ($stored_hash === null) {
+  $stored_hash = password_hash($bootstrap_password_plain, PASSWORD_DEFAULT);
+  save_admin_hash($pass_file, $stored_hash);
+}
+
+/* =========================
    1) LOGIN (password gate)
 ========================= */
-$password_corretta = "lunabella";
-
 if (isset($_GET['logout'])) {
   session_destroy();
   header("Location: index.php");
@@ -13,7 +60,11 @@ if (isset($_GET['logout'])) {
 }
 
 if (isset($_POST['login_pass'])) {
-  if (hash_equals($password_corretta, (string)$_POST['login_pass'])) {
+  $pass = (string)($_POST['login_pass'] ?? '');
+  $hash = load_admin_hash($pass_file);
+
+  if ($hash && password_verify($pass, $hash)) {
+    session_regenerate_id(true);
     $_SESSION['user_auth'] = true;
   } else {
     $error = "Password errata!";
@@ -22,6 +73,9 @@ if (isset($_POST['login_pass'])) {
 
 function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
 
+/* =========================
+   1b) PAGE: LOGIN UI
+========================= */
 if (!isset($_SESSION['user_auth'])): ?>
 <!doctype html>
 <html lang="it">
@@ -192,23 +246,42 @@ if (!isset($_SESSION['user_auth'])): ?>
 
 <?php
 /* =========================
+   1c) CHANGE PASSWORD (ADMIN)
+========================= */
+$pass_msg = null;
+$pass_err = null;
+
+if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST['azione']) && $_POST['azione'] === 'change_pass') {
+  $old = (string)($_POST['old_pass'] ?? '');
+  $new = (string)($_POST['new_pass'] ?? '');
+  $new2 = (string)($_POST['new_pass2'] ?? '');
+
+  $hash = load_admin_hash($pass_file);
+
+  if (!$hash || !password_verify($old, $hash)) {
+    $pass_err = "Password attuale non corretta.";
+  } elseif (strlen($new) < 6) {
+    $pass_err = "La nuova password deve avere almeno 6 caratteri.";
+  } elseif ($new !== $new2) {
+    $pass_err = "Le due password nuove non coincidono.";
+  } else {
+    $new_hash = password_hash($new, PASSWORD_DEFAULT);
+    save_admin_hash($pass_file, $new_hash);
+    $pass_msg = "Password aggiornata con successo ✅";
+  }
+}
+
+/* =========================
    2) DATA + CRUD CONTATTI
 ========================= */
-$upload_dir = __DIR__ . '/uploadslist/';
-$upload_url = 'uploadslist/';
-
-if (!is_dir($upload_dir)) @mkdir($upload_dir, 0777, true);
-
 $json_file = $upload_dir . 'contatti.json';
 $contacts = file_exists($json_file) ? json_decode(file_get_contents($json_file), true) : [];
 if (!is_array($contacts)) $contacts = [];
 
 function safe_path_inside_uploads($path, $upload_url) {
-  // accetta solo path tipo 'uploadslist/filename.ext'
   if (!$path) return "";
   $path = str_replace("\\", "/", (string)$path);
   if (strpos($path, $upload_url) !== 0) return "";
-  // niente traversal
   if (strpos($path, "..") !== false) return "";
   return $path;
 }
@@ -253,7 +326,6 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST['azione']) && $_POST['
     'preferito' => $preferito
   ];
 
-  // sanitize minimal
   $contact_data['nome'] = h($contact_data['nome']);
   $contact_data['cognome'] = h($contact_data['cognome']);
   $contact_data['telefono'] = h($contact_data['telefono']);
@@ -296,7 +368,6 @@ if (isset($_GET['action'], $_GET['id'])) {
   exit();
 }
 
-// Sort: preferiti first, poi nome
 usort($contacts, function($a, $b) {
   $ap = (int)!!($a['preferito'] ?? false);
   $bp = (int)!!($b['preferito'] ?? false);
@@ -343,18 +414,6 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
         linear-gradient(180deg, var(--bg0), var(--bg1));
       padding-bottom: 40px;
     }
-
-    /* safe areas */
-    .safe{
-      padding: max(16px, env(safe-area-inset-top)) 16px 16px 16px;
-    }
-
-    .shell{
-      width: min(980px, 100%);
-      margin: 0 auto;
-    }
-
-    /* top bar glass */
     .topbar{
       position: sticky; top: 0;
       z-index: 50;
@@ -405,7 +464,6 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
       gap:10px;
       flex:0 0 auto;
     }
-
     .iconbtn{
       width: 40px; height: 40px;
       border-radius: 16px;
@@ -438,7 +496,6 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
     }
     .logout:hover{ color: var(--text); background: rgba(255,255,255,.08) }
 
-    /* search + tabs */
     .toolbar{
       width:min(980px, 100%);
       margin: 14px auto 0;
@@ -501,7 +558,6 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
       box-shadow: 0 12px 26px rgba(0,0,0,.22);
     }
 
-    /* list */
     .content{
       width:min(980px, 100%);
       margin: 16px auto 0;
@@ -515,17 +571,9 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
       color: rgba(255,255,255,.62);
       padding-left: 2px;
     }
-
-    .list{
-      display:flex;
-      flex-direction:column;
-      gap:10px;
-    }
-
+    .list{ display:flex; flex-direction:column; gap:10px; }
     .item{
-      display:flex;
-      align-items:center;
-      gap:12px;
+      display:flex; align-items:center; gap:12px;
       padding: 12px 12px;
       border-radius: 20px;
       border: 1px solid rgba(255,255,255,.14);
@@ -539,12 +587,10 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
     }
     .item:hover{ transform: translateY(-1px); background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.05)) }
     .item:active{ transform: translateY(1px) }
-
     .avatar{
       width: 44px; height: 44px;
       border-radius: 18px;
-      display:grid;
-      place-items:center;
+      display:grid; place-items:center;
       color: rgba(255,255,255,.95);
       font-weight: 800;
       overflow:hidden;
@@ -554,25 +600,18 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
     }
     .avatar img{ width:100%; height:100%; object-fit:cover }
     .meta{
-      min-width:0;
-      flex:1 1 auto;
-      display:flex;
-      flex-direction:column;
-      gap:2px;
+      min-width:0; flex:1 1 auto;
+      display:flex; flex-direction:column; gap:2px;
     }
     .name{
       font-weight: 780;
       letter-spacing:.1px;
-      white-space:nowrap;
-      overflow:hidden;
-      text-overflow: ellipsis;
+      white-space:nowrap; overflow:hidden; text-overflow: ellipsis;
     }
     .mini{
       color: var(--muted);
       font-size: 13px;
-      white-space:nowrap;
-      overflow:hidden;
-      text-overflow: ellipsis;
+      white-space:nowrap; overflow:hidden; text-overflow: ellipsis;
     }
     .phone{
       flex:0 0 auto;
@@ -584,13 +623,7 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
       border: 1px solid rgba(255,255,255,.12);
       background: rgba(0,0,0,.12);
     }
-    .badgeStar{
-      margin-left: 6px;
-      color: rgba(255,255,255,.90);
-      opacity:.9;
-      font-size: 14px;
-    }
-
+    .badgeStar{ margin-left: 6px; opacity:.9; font-size: 14px; }
     .empty{
       margin-top: 16px;
       padding: 18px;
@@ -601,275 +634,72 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
       text-align:center;
     }
 
-    /* overlay (detail) */
-    .overlay{
-      position: fixed;
-      inset: 0;
-      z-index: 200;
-      display:none;
-      flex-direction:column;
-      background: radial-gradient(900px 700px at 50% 0%, rgba(125,211,252,.18), transparent 55%),
-                  radial-gradient(900px 700px at 50% 100%, rgba(167,139,250,.16), transparent 60%),
-                  linear-gradient(180deg, rgba(5,8,16,.92), rgba(8,12,24,.96));
-      backdrop-filter: blur(18px);
-      -webkit-backdrop-filter: blur(18px);
-    }
-    .overlayTop{
-      position: sticky; top:0;
-      z-index: 5;
-      padding: max(14px, env(safe-area-inset-top)) 16px 12px 16px;
-      border-bottom: 1px solid rgba(255,255,255,.10);
-      background: linear-gradient(180deg, rgba(12,18,36,.72), rgba(12,18,36,.30));
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-    }
-    .overlayTopInner{
+    /* mini toast */
+    .toast{
       width:min(980px, 100%);
-      margin:0 auto;
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      gap:10px;
-    }
-    .overlayBtns{ display:flex; gap:10px; align-items:center; }
-
-    .detail{
-      width:min(980px, 100%);
-      margin: 0 auto;
-      padding: 18px 16px 28px;
-    }
-
-    .hero{
-      margin-top: 6px;
-      display:grid;
-      place-items:center;
-      gap: 10px;
-      padding: 16px 0 10px;
-    }
-    .bigAvatar{
-      width: 110px; height: 110px;
-      border-radius: 36px;
-      display:grid;
-      place-items:center;
-      overflow:hidden;
-      border: 1px solid rgba(255,255,255,.18);
-      box-shadow: 0 26px 70px rgba(0,0,0,.35);
-      font-size: 42px;
-      font-weight: 900;
-      color: rgba(255,255,255,.95);
-    }
-    .bigAvatar img{ width:100%; height:100%; object-fit:cover }
-    .bigName{
-      font-size: 26px;
-      font-weight: 900;
-      letter-spacing:.2px;
-      text-align:center;
-      margin: 0;
-    }
-    .card{
-      margin-top: 14px;
-      border-radius: 26px;
-      border: 1px solid rgba(255,255,255,.14);
-      background: linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.05));
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      box-shadow: 0 24px 70px rgba(0,0,0,.28);
-      overflow:hidden;
-    }
-    .cardHeader{
-      padding: 16px 16px 10px;
-      color: rgba(255,255,255,.75);
-      font-size: 12px;
-      letter-spacing:.18em;
-      text-transform: uppercase;
-    }
-    .row{
-      display:flex;
-      gap:12px;
-      align-items:flex-start;
-      padding: 14px 16px;
-      border-top: 1px solid rgba(255,255,255,.08);
-    }
-    .row:first-of-type{ border-top: none; }
-    .ico{
-      width: 34px; height: 34px;
-      border-radius: 14px;
-      display:grid;
-      place-items:center;
-      border: 1px solid rgba(255,255,255,.12);
-      background: rgba(0,0,0,.14);
-      flex:0 0 auto;
-    }
-    .rowMain{ min-width:0; flex:1 1 auto; }
-    .rowLabel{
-      font-size: 12px;
-      color: rgba(255,255,255,.58);
-      margin-bottom: 2px;
-    }
-    .rowValue{
-      font-size: 14px;
-      color: rgba(255,255,255,.90);
-      white-space:nowrap;
-      overflow:hidden;
-      text-overflow: ellipsis;
-    }
-    .quick{
-      display:flex;
-      gap:10px;
-      padding: 14px 16px 16px;
-      border-top: 1px solid rgba(255,255,255,.08);
-    }
-    .pill{
-      flex:1 1 0;
-      text-decoration:none;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      gap:10px;
-      padding: 12px 12px;
-      border-radius: 18px;
-      border: 1px solid rgba(255,255,255,.14);
-      background: rgba(255,255,255,.07);
-      color: rgba(255,255,255,.92);
-      font-weight: 780;
-      transition:.18s ease;
-    }
-    .pill:hover{ transform: translateY(-1px); background: rgba(255,255,255,.09) }
-    .pill:active{ transform: translateY(1px) }
-
-    /* bottom sheet (edit) */
-    .sheetWrap{
-      position: fixed;
-      inset: 0;
-      z-index: 300;
-      display:none;
-      align-items:flex-end;
-      justify-content:center;
-      background: rgba(0,0,0,.48);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      padding: 16px;
-    }
-    .sheet{
-      width: min(560px, 100%);
-      border-radius: 28px;
-      border: 1px solid rgba(255,255,255,.16);
-      background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.06));
-      backdrop-filter: blur(18px);
-      -webkit-backdrop-filter: blur(18px);
-      box-shadow: var(--shadow);
-      overflow:hidden;
-      transform: translateY(10px);
-      animation: pop .22s ease forwards;
-    }
-    @keyframes pop { to { transform: translateY(0); } }
-
-    .sheetTop{
-      padding: 14px 16px 10px;
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      gap:10px;
-      border-bottom: 1px solid rgba(255,255,255,.10);
-    }
-    .handle{
-      width: 54px; height: 5px;
-      border-radius: 999px;
-      background: rgba(255,255,255,.22);
       margin: 10px auto 0;
+      padding: 0 16px;
     }
-    .sheetTitle{
-      margin:0;
-      font-size: 16px;
-      font-weight: 850;
-      letter-spacing:.2px;
-    }
-    .sheetBody{ padding: 12px 16px 16px; }
-    .grid{
-      display:grid;
-      grid-template-columns: 1fr;
-      gap: 10px;
-    }
-    @media (min-width: 720px){
-      .grid{
-        grid-template-columns: 1fr 1fr;
-      }
-      .grid .full{ grid-column: 1 / -1; }
-    }
-    .f{
-      display:flex;
-      flex-direction:column;
-      gap:7px;
-    }
-    .f label{
-      font-size: 12px;
-      color: rgba(255,255,255,.60);
-    }
-    .f input{
-      width:100%;
-      padding: 13px 14px;
-      border-radius: 18px;
-      border: 1px solid rgba(255,255,255,.14);
-      background: rgba(0,0,0,.14);
-      color: var(--text);
-      outline:none;
-      transition:.18s ease;
-    }
-    .f input:focus{
-      border-color: rgba(125,211,252,.55);
-      box-shadow: 0 0 0 4px rgba(125,211,252,.14);
-      transform: translateY(-1px);
-    }
-    .sheetActions{
-      display:flex;
-      gap:10px;
-      justify-content:flex-end;
-      padding: 12px 16px 16px;
-      border-top: 1px solid rgba(255,255,255,.10);
-    }
-    .btn{
-      border:none;
-      cursor:pointer;
-      border-radius: 18px;
-      padding: 12px 14px;
-      font-weight: 850;
-      transition:.18s ease;
-      user-select:none;
-    }
-    .btnGhost{
-      background: rgba(255,255,255,.08);
-      border: 1px solid rgba(255,255,255,.14);
-      color: rgba(255,255,255,.85);
-    }
-    .btnGhost:hover{ transform: translateY(-1px); background: rgba(255,255,255,.10) }
-    .btnPrimary{
-      color: rgba(0,0,0,.85);
-      background: linear-gradient(135deg, rgba(125,211,252,.95), rgba(167,139,250,.90));
-      border: 1px solid rgba(255,255,255,.18);
-      box-shadow: 0 18px 40px rgba(0,0,0,.28);
-    }
-    .btnPrimary:hover{ transform: translateY(-1px); filter: brightness(1.02) }
-    .btnDanger{
-      background: rgba(251,113,133,.14);
-      border: 1px solid rgba(251,113,133,.32);
+    .msg{
+      padding: 10px 12px;
+      border-radius: 16px;
+      border: 1px solid rgba(52,211,153,.35);
+      background: rgba(52,211,153,.12);
       color: rgba(255,255,255,.92);
+      font-size: 13px;
+    }
+    .err{
+      padding: 10px 12px;
+      border-radius: 16px;
+      border: 1px solid rgba(251,113,133,.35);
+      background: rgba(251,113,133,.12);
+      color: rgba(255,255,255,.92);
+      font-size: 13px;
     }
 
-    /* desktop two-column feeling */
-    @media (min-width: 980px){
-      .phone{ font-size: 13px }
-      .subtitle{ max-width: 520px; }
-    }
+    /* overlay + sheet: (il tuo codice originale sotto non lo tocco) */
+    .overlay{ position:fixed; inset:0; z-index:200; display:none; flex-direction:column; background: rgba(0,0,0,.7); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
+    .overlayTop{ position:sticky; top:0; z-index:5; padding:max(14px, env(safe-area-inset-top)) 16px 12px 16px; border-bottom:1px solid rgba(255,255,255,.10); background: rgba(12,18,36,.55); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
+    .overlayTopInner{ width:min(980px, 100%); margin:0 auto; display:flex; align-items:center; justify-content:space-between; gap:10px; }
+    .overlayBtns{ display:flex; gap:10px; align-items:center; }
+    .detail{ width:min(980px, 100%); margin:0 auto; padding:18px 16px 28px; }
+    .hero{ margin-top:6px; display:grid; place-items:center; gap:10px; padding:16px 0 10px; }
+    .bigAvatar{ width:110px; height:110px; border-radius:36px; display:grid; place-items:center; overflow:hidden; border:1px solid rgba(255,255,255,.18); box-shadow: 0 26px 70px rgba(0,0,0,.35); font-size:42px; font-weight:900; color: rgba(255,255,255,.95); }
+    .bigAvatar img{ width:100%; height:100%; object-fit:cover }
+    .bigName{ font-size: 26px; font-weight: 900; letter-spacing:.2px; text-align:center; margin:0; }
+    .card{ margin-top:14px; border-radius:26px; border:1px solid rgba(255,255,255,.14); background: linear-gradient(180deg, rgba(255,255,255,.10), rgba(255,255,255,.05)); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); box-shadow: 0 24px 70px rgba(0,0,0,.28); overflow:hidden; }
+    .cardHeader{ padding:16px 16px 10px; color: rgba(255,255,255,.75); font-size:12px; letter-spacing:.18em; text-transform: uppercase; }
+    .row{ display:flex; gap:12px; align-items:flex-start; padding:14px 16px; border-top:1px solid rgba(255,255,255,.08); }
+    .row:first-of-type{ border-top:none; }
+    .ico{ width:34px; height:34px; border-radius:14px; display:grid; place-items:center; border:1px solid rgba(255,255,255,.12); background: rgba(0,0,0,.14); flex:0 0 auto; }
+    .rowMain{ min-width:0; flex:1 1 auto; }
+    .rowLabel{ font-size:12px; color: rgba(255,255,255,.58); margin-bottom:2px; }
+    .rowValue{ font-size:14px; color: rgba(255,255,255,.90); white-space:nowrap; overflow:hidden; text-overflow: ellipsis; }
+    .quick{ display:flex; gap:10px; padding:14px 16px 16px; border-top:1px solid rgba(255,255,255,.08); }
+    .pill{ flex:1 1 0; text-decoration:none; display:flex; align-items:center; justify-content:center; gap:10px; padding:12px 12px; border-radius:18px; border:1px solid rgba(255,255,255,.14); background: rgba(255,255,255,.07); color: rgba(255,255,255,.92); font-weight: 780; transition:.18s ease; }
+    .pill:hover{ transform: translateY(-1px); background: rgba(255,255,255,.09) }
 
-    /* reduced motion */
-    @media (prefers-reduced-motion: reduce){
-      *{ animation:none!important; transition:none!important; scroll-behavior:auto!important; }
-    }
+    .sheetWrap{ position:fixed; inset:0; z-index:300; display:none; align-items:flex-end; justify-content:center; background: rgba(0,0,0,.48); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); padding:16px; }
+    .sheet{ width:min(560px, 100%); border-radius:28px; border:1px solid rgba(255,255,255,.16); background: linear-gradient(180deg, rgba(255,255,255,.12), rgba(255,255,255,.06)); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); box-shadow: var(--shadow); overflow:hidden; transform: translateY(10px); animation: pop .22s ease forwards; }
+    @keyframes pop { to { transform: translateY(0); } }
+    .handle{ width:54px; height:5px; border-radius:999px; background: rgba(255,255,255,.22); margin:10px auto 0; }
+    .sheetTop{ padding:14px 16px 10px; display:flex; align-items:center; justify-content:space-between; gap:10px; border-bottom:1px solid rgba(255,255,255,.10); }
+    .sheetTitle{ margin:0; font-size: 16px; font-weight: 850; letter-spacing:.2px; }
+    .sheetBody{ padding: 12px 16px 16px; }
+    .grid{ display:grid; grid-template-columns: 1fr; gap:10px; }
+    .f{ display:flex; flex-direction:column; gap:7px; }
+    .f label{ font-size:12px; color: rgba(255,255,255,.60); }
+    .f input{ width:100%; padding:13px 14px; border-radius:18px; border:1px solid rgba(255,255,255,.14); background: rgba(0,0,0,.14); color: var(--text); outline:none; transition:.18s ease; }
+    .f input:focus{ border-color: rgba(125,211,252,.55); box-shadow: 0 0 0 4px rgba(125,211,252,.14); transform: translateY(-1px); }
+    .sheetActions{ display:flex; gap:10px; justify-content:flex-end; padding:12px 16px 16px; border-top:1px solid rgba(255,255,255,.10); }
+    .btn{ border:none; cursor:pointer; border-radius:18px; padding:12px 14px; font-weight: 850; transition:.18s ease; user-select:none; }
+    .btnGhost{ background: rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.14); color: rgba(255,255,255,.85); }
+    .btnPrimary{ color: rgba(0,0,0,.85); background: linear-gradient(135deg, rgba(125,211,252,.95), rgba(167,139,250,.90)); border:1px solid rgba(255,255,255,.18); box-shadow: 0 18px 40px rgba(0,0,0,.28); }
+    .btnDanger{ background: rgba(251,113,133,.14); border:1px solid rgba(251,113,133,.32); color: rgba(255,255,255,.92); }
   </style>
 </head>
 <body>
 
-  <!-- TOPBAR -->
   <div class="topbar">
     <div class="topbar-inner">
       <div class="title">
@@ -882,6 +712,10 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
 
       <div class="actions">
         <button class="iconbtn" onclick="openEdit(null)" aria-label="Nuovo contatto" title="Nuovo">➕</button>
+
+        <!-- NUOVO: cambio password -->
+        <button class="iconbtn" onclick="openPass()" aria-label="Cambia password" title="Cambia password">🔒</button>
+
         <a class="logout" href="?logout=1">Esci</a>
       </div>
     </div>
@@ -899,7 +733,13 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
     </div>
   </div>
 
-  <!-- LIST -->
+  <?php if ($pass_msg || $pass_err): ?>
+    <div class="toast">
+      <?php if ($pass_msg): ?><div class="msg"><?= h($pass_msg) ?></div><?php endif; ?>
+      <?php if ($pass_err): ?><div class="err"><?= h($pass_err) ?></div><?php endif; ?>
+    </div>
+  <?php endif; ?>
+
   <div class="content">
     <div id="list" class="list"></div>
     <div id="empty" class="empty" style="display:none;">
@@ -954,7 +794,7 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
     </div>
   </div>
 
-  <!-- EDIT SHEET -->
+  <!-- EDIT SHEET (tuo originale) -->
   <div id="editSheetWrap" class="sheetWrap" onclick="sheetBackdropClose(event)">
     <div class="sheet" role="dialog" aria-modal="true" aria-label="Modifica contatto">
       <div class="handle"></div>
@@ -984,15 +824,15 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
               <label for="e_cognome">Cognome</label>
               <input type="text" name="cognome" id="e_cognome" placeholder="Cognome">
             </div>
-            <div class="f full">
+            <div class="f">
               <label for="e_tel">Telefono *</label>
               <input type="tel" name="telefono" id="e_tel" placeholder="+39 ..." required>
             </div>
-            <div class="f full">
+            <div class="f">
               <label for="e_email">Email</label>
               <input type="email" name="email" id="e_email" placeholder="nome@dominio.it">
             </div>
-            <div class="f full">
+            <div class="f">
               <label for="e_avatar">Avatar (immagine)</label>
               <input id="e_avatar" type="file" name="avatar" accept="image/*">
             </div>
@@ -1007,23 +847,63 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
     </div>
   </div>
 
+  <!-- NUOVO: CHANGE PASSWORD SHEET -->
+  <div id="passSheetWrap" class="sheetWrap" onclick="passBackdropClose(event)">
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="Cambia password admin">
+      <div class="handle"></div>
+      <div class="sheetTop">
+        <div>
+          <p class="sheetTitle">Cambia password</p>
+          <div style="color:rgba(255,255,255,.55); font-size:12px; margin-top:4px;">
+            Password salvata in: <span style="opacity:.9"><?= h($upload_url) ?>admin_pass.json</span>
+          </div>
+        </div>
+        <button class="iconbtn" onclick="closePass()" aria-label="Chiudi">✕</button>
+      </div>
+
+      <form action="index.php" method="POST" autocomplete="off">
+        <div class="sheetBody">
+          <input type="hidden" name="azione" value="change_pass">
+
+          <div class="grid">
+            <div class="f">
+              <label for="old_pass">Password attuale *</label>
+              <input id="old_pass" type="password" name="old_pass" required>
+            </div>
+
+            <div class="f">
+              <label for="new_pass">Nuova password *</label>
+              <input id="new_pass" type="password" name="new_pass" required>
+            </div>
+
+            <div class="f">
+              <label for="new_pass2">Ripeti nuova password *</label>
+              <input id="new_pass2" type="password" name="new_pass2" required>
+            </div>
+          </div>
+        </div>
+
+        <div class="sheetActions">
+          <button type="button" class="btn btnGhost" onclick="closePass()">Annulla</button>
+          <button type="submit" class="btn btnPrimary">Aggiorna</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
 <script>
   const ALL_CONTACTS = <?= $contacts_json ?: "[]" ?>;
 
-  let currentTab = "all"; // all | fav
+  let currentTab = "all";
   let currentQuery = "";
   let viewing = null;
 
-  // Helpers
   const $ = (id) => document.getElementById(id);
-
   function normalize(s){ return (s||"").toString().toLowerCase().trim(); }
 
   function contactMatches(c, q){
     if (!q) return true;
-    const hay = [
-      c.nome, c.cognome, c.telefono, c.email
-    ].map(normalize).join(" ");
+    const hay = [c.nome, c.cognome, c.telefono, c.email].map(normalize).join(" ");
     return hay.includes(q);
   }
 
@@ -1050,7 +930,6 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
     $("empty").style.display = showEmpty ? "block" : "none";
     if (showEmpty) return;
 
-    // Sections only when relevant
     const sections = [];
     if (currentTab === "all") {
       if (grouped.fav.length) sections.push({ label: "Preferiti", items: grouped.fav });
@@ -1117,9 +996,7 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
     }
   }
 
-  // Stable colors from id (no more random)
   function hexFromId(id){
-    // simple deterministic hash
     let h = 0;
     const s = (id || "").toString();
     for (let i=0;i<s.length;i++) h = ((h<<5)-h) + s.charCodeAt(i), h |= 0;
@@ -1141,7 +1018,6 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
     return `rgba(${r},${g},${b},${a})`;
   }
 
-  // Tabs
   function setTab(t){
     currentTab = t;
     $("tabAll").classList.toggle("active", t === "all");
@@ -1149,13 +1025,11 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
     render();
   }
 
-  // Search
   $("q").addEventListener("input", (e) => {
     currentQuery = normalize(e.target.value);
     render();
   });
 
-  // View overlay
   function openView(c){
     viewing = c;
 
@@ -1199,7 +1073,6 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
     document.body.style.overflow = "";
   }
 
-  // Edit sheet
   function openEdit(c=null){
     closeView();
 
@@ -1234,15 +1107,30 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
     if (e.target && e.target.id === "editSheetWrap") closeEdit();
   }
 
-  // ESC closes overlays
+  // NUOVO: password sheet
+  function openPass(){
+    // chiudo eventuale overlay
+    closeView();
+    $("passSheetWrap").style.display = "flex";
+    document.body.style.overflow = "hidden";
+    setTimeout(() => $("old_pass").focus(), 50);
+  }
+  function closePass(){
+    $("passSheetWrap").style.display = "none";
+    document.body.style.overflow = "";
+  }
+  function passBackdropClose(e){
+    if (e.target && e.target.id === "passSheetWrap") closePass();
+  }
+
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
+      if ($("passSheetWrap").style.display === "flex") closePass();
       if ($("editSheetWrap").style.display === "flex") closeEdit();
       if ($("viewOverlay").style.display === "flex") closeView();
     }
   });
 
-  // initial render
   render();
 </script>
 
