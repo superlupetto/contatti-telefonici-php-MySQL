@@ -40,12 +40,10 @@ CREATE TABLE users (
 
 ## 📂 Struttura Progetto
 
- UserManagementPanel/
+ UserManagementPanel
  
- │
- 
- ├── index.php
- 
+ │ 
+ ├── index.php 
  └── README.md
  
 
