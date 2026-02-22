@@ -38,16 +38,6 @@ CREATE TABLE users (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
-## 📂 Struttura Progetto
-
- UserManagementPanel
- 
- │ 
- ├── index.php 
- 
- └── README.md
- 
-
 ## 🔄 Installazione
 
 1. Caricare i file sul server
