@@ -1,57 +1,325 @@
 <?php
+ini_set('display_errors', '1');
+ini_set('display_startup_errors', '1');
+error_reporting(E_ALL);
+
 session_start();
 
 /* =========================
-   0) CONFIG PASSWORD (hash su file)
+   0) CONFIG DB + UPLOADS
 ========================= */
 $upload_dir = __DIR__ . '/uploadslist/';
 $upload_url = 'uploadslist/';
-
 if (!is_dir($upload_dir)) @mkdir($upload_dir, 0777, true);
 
-$pass_file = $upload_dir . 'admin_pass.json';
+/** Bootstrap admin (solo prima installazione) */
+$bootstrap_admin_user = "admin";
+$bootstrap_admin_pass = "nome";
 
-/**
- * Password di bootstrap (solo per la PRIMA migrazione).
- * Dopo che esiste admin_pass.json, non viene più usata.
- */
-$bootstrap_password_plain = "nome";
+/** DB config */
+define('DB_HOST', 'localhost');
+define('DB_NAME', 'rubrica');
+define('DB_USER', 'root');
+define('DB_PASS', 'password'); // <-- metti la tua password DB
 
-/**
- * Legge hash password da file.
- */
-function load_admin_hash($pass_file) {
-  if (!file_exists($pass_file)) return null;
-  $raw = file_get_contents($pass_file);
-  $data = json_decode($raw, true);
-  if (!is_array($data)) return null;
-  $hash = $data['hash'] ?? null;
-  return is_string($hash) && $hash !== '' ? $hash : null;
+if (!function_exists('str_starts_with')) {
+  function str_starts_with(string $haystack, string $needle): bool {
+    return $needle === '' || strpos($haystack, $needle) === 0;
+  }
 }
 
-/**
- * Salva hash password su file.
- */
-function save_admin_hash($pass_file, $hash) {
-  $payload = [
-    'algo' => 'password_hash',
-    'hash' => $hash,
-    'updated_at' => date('c'),
-  ];
-  file_put_contents($pass_file, json_encode($payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+function db(): PDO {
+  static $pdo = null;
+  if ($pdo) return $pdo;
+
+  try {
+    $dsn = "mysql:host=" . DB_HOST . ";dbname=" . DB_NAME . ";charset=utf8mb4";
+    $pdo = new PDO($dsn, DB_USER, DB_PASS, [
+      PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
+      PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+      PDO::ATTR_EMULATE_PREPARES => false,
+    ]);
+    return $pdo;
+  } catch (Throwable $e) {
+    http_response_code(500);
+    echo "<pre style='padding:14px;background:#111;color:#fff;border-radius:12px;white-space:pre-wrap'>";
+    echo "ERRORE CONNESSIONE DB\n\n";
+    echo "Host: ".DB_HOST."\nDB: ".DB_NAME."\nUser: ".DB_USER."\n\n";
+    echo "Dettaglio:\n".$e->getMessage();
+    echo "</pre>";
+    exit;
+  }
 }
 
-/**
- * Migrazione automatica: se non esiste file hash, crea hash da bootstrap_password_plain.
- */
-$stored_hash = load_admin_hash($pass_file);
-if ($stored_hash === null) {
-  $stored_hash = password_hash($bootstrap_password_plain, PASSWORD_DEFAULT);
-  save_admin_hash($pass_file, $stored_hash);
+function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
+
+function safe_path_inside_uploads($path, $upload_url) {
+  if (!$path) return "";
+  $path = str_replace("\\", "/", (string)$path);
+  if (strpos($path, $upload_url) !== 0) return "";
+  if (strpos($path, "..") !== false) return "";
+  return $path;
 }
 
 /* =========================
-   1) LOGIN (password gate)
+   DB INIT + MIGRATION
+========================= */
+function init_db(string $admin_user, string $admin_pass): void {
+  $pdo = db();
+
+  $pdo->exec("
+    CREATE TABLE IF NOT EXISTS users (
+      id INT AUTO_INCREMENT PRIMARY KEY,
+      username VARCHAR(50) NOT NULL UNIQUE,
+      pass_hash VARCHAR(255) NOT NULL,
+      role ENUM('admin','moderator','user') NOT NULL DEFAULT 'user',
+      is_active TINYINT(1) NOT NULL DEFAULT 1,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+    ) ENGINE=InnoDB;
+  ");
+
+  $pdo->exec("
+    CREATE TABLE IF NOT EXISTS contacts (
+      id VARCHAR(64) PRIMARY KEY,
+      user_id INT NOT NULL,
+      nome VARCHAR(120) NOT NULL,
+      cognome VARCHAR(120) NOT NULL DEFAULT '',
+      telefono VARCHAR(60) NOT NULL,
+      email VARCHAR(190) NOT NULL DEFAULT '',
+      avatar VARCHAR(255) NOT NULL DEFAULT '',
+      preferito TINYINT(1) NOT NULL DEFAULT 0,
+      created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+      KEY idx_user_id (user_id),
+      KEY idx_preferito_nome (preferito, nome),
+      KEY idx_tel (telefono),
+      KEY idx_email (email)
+    ) ENGINE=InnoDB;
+  ");
+
+  // Bootstrap admin se non esiste
+  $st = $pdo->prepare("SELECT id FROM users WHERE username=? LIMIT 1");
+  $st->execute([$admin_user]);
+  if (!$st->fetchColumn()) {
+    $hash = password_hash($admin_pass, PASSWORD_DEFAULT);
+    $ins = $pdo->prepare("INSERT INTO users (username, pass_hash, role, is_active) VALUES (?, ?, 'admin', 1)");
+    $ins->execute([$admin_user, $hash]);
+  }
+}
+
+function table_exists(string $table): bool {
+  $pdo = db();
+  $st = $pdo->prepare("SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name=? LIMIT 1");
+  $st->execute([$table]);
+  return (bool)$st->fetchColumn();
+}
+
+function column_exists(string $table, string $column): bool {
+  $pdo = db();
+  $st = $pdo->prepare("SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name=? AND column_name=? LIMIT 1");
+  $st->execute([$table, $column]);
+  return (bool)$st->fetchColumn();
+}
+
+function migrate_db(): void {
+  $pdo = db();
+
+  // USERS.role fix (evita 1265)
+  if (table_exists('users') && column_exists('users', 'role')) {
+    $pdo->exec("ALTER TABLE users MODIFY role VARCHAR(20) NOT NULL DEFAULT 'user'");
+    $pdo->exec("UPDATE users SET role = LOWER(role)");
+    $pdo->exec("UPDATE users SET role='user' WHERE role IS NULL OR role='' OR role NOT IN ('admin','moderator','user')");
+    $pdo->exec("ALTER TABLE users MODIFY role ENUM('admin','moderator','user') NOT NULL DEFAULT 'user'");
+  }
+
+  // CONTACTS.user_id migrazione (se avevi tabella vecchia)
+  if (table_exists('contacts')) {
+
+    if (!column_exists('contacts', 'user_id')) {
+      $pdo->exec("ALTER TABLE contacts ADD COLUMN user_id INT NULL AFTER id");
+    }
+
+    $adminId = (int)$pdo->query("SELECT id FROM users WHERE role='admin' ORDER BY id ASC LIMIT 1")->fetchColumn();
+    if ($adminId <= 0) {
+      $adminId = (int)$pdo->query("SELECT id FROM users ORDER BY id ASC LIMIT 1")->fetchColumn();
+    }
+
+    if ($adminId > 0) {
+      $st = $pdo->prepare("UPDATE contacts SET user_id=? WHERE user_id IS NULL OR user_id=0");
+      $st->execute([$adminId]);
+    }
+
+    $pdo->exec("ALTER TABLE contacts MODIFY user_id INT NOT NULL");
+
+    // Indice
+    try { $pdo->exec("ALTER TABLE contacts ADD KEY idx_user_id (user_id)"); } catch (Throwable $e) {}
+
+    // FK (non blocca se già esiste o se non si può creare)
+    try {
+      $pdo->exec("ALTER TABLE contacts
+        ADD CONSTRAINT fk_contacts_user
+        FOREIGN KEY (user_id) REFERENCES users(id)
+        ON DELETE CASCADE
+      ");
+    } catch (Throwable $e) {}
+  }
+}
+
+init_db($bootstrap_admin_user, $bootstrap_admin_pass);
+migrate_db();
+
+/* =========================
+   CSRF
+========================= */
+if (empty($_SESSION['csrf'])) {
+  $_SESSION['csrf'] = bin2hex(random_bytes(16));
+}
+$CSRF = $_SESSION['csrf'];
+
+/* =========================
+   AUTH HELPERS
+========================= */
+function current_user(): ?array {
+  if (empty($_SESSION['uid'])) return null;
+  $pdo = db();
+  $st = $pdo->prepare("SELECT id, username, role, is_active FROM users WHERE id=? LIMIT 1");
+  $st->execute([(int)$_SESSION['uid']]);
+  $u = $st->fetch();
+  if (!$u || (int)$u['is_active'] !== 1) return null;
+  return $u;
+}
+function require_auth(): array {
+  $u = current_user();
+  if (!$u) {
+    session_destroy();
+    header("Location: index.php");
+    exit();
+  }
+  return $u;
+}
+function is_admin(array $u): bool { return ($u['role'] ?? '') === 'admin'; }
+function can_manage_contacts(array $u): bool {
+  $r = (string)($u['role'] ?? '');
+  return in_array($r, ['admin','moderator','user'], true);
+}
+function require_admin(array $u): void {
+  if (!is_admin($u)) { http_response_code(403); echo "Permesso negato."; exit; }
+}
+
+/* =========================
+   USERS (ADMIN)
+========================= */
+function count_admins_active(): int {
+  $pdo = db();
+  return (int)$pdo->query("SELECT COUNT(*) FROM users WHERE role='admin' AND is_active=1")->fetchColumn();
+}
+function fetch_users(): array {
+  $pdo = db();
+  return $pdo->query("SELECT id, username, role, is_active, created_at, updated_at FROM users ORDER BY role='admin' DESC, role='moderator' DESC, username ASC")->fetchAll() ?: [];
+}
+function fetch_users_for_select(): array {
+  $pdo = db();
+  return $pdo->query("SELECT id, username, role, is_active FROM users WHERE is_active=1 ORDER BY username ASC")->fetchAll() ?: [];
+}
+function create_user_admin(string $username, string $plain_pass, string $role): void {
+  $pdo = db();
+  $hash = password_hash($plain_pass, PASSWORD_DEFAULT);
+  $st = $pdo->prepare("INSERT INTO users (username, pass_hash, role, is_active) VALUES (?, ?, ?, 1)");
+  $st->execute([$username, $hash, $role]);
+}
+function set_user_role(int $uid, string $role): void {
+  $pdo = db();
+  $st = $pdo->prepare("UPDATE users SET role=? WHERE id=?");
+  $st->execute([$role, $uid]);
+}
+function set_user_active(int $uid, int $active): void {
+  $pdo = db();
+  $st = $pdo->prepare("UPDATE users SET is_active=? WHERE id=?");
+  $st->execute([$active, $uid]);
+}
+function delete_user(int $uid): void {
+  $pdo = db();
+  $st = $pdo->prepare("DELETE FROM users WHERE id=?");
+  $st->execute([$uid]);
+}
+
+/* =========================
+   CONTACTS CRUD (multi-tenant)
+========================= */
+function contact_belongs_to_user(string $id, int $uid): bool {
+  $pdo = db();
+  $st = $pdo->prepare("SELECT 1 FROM contacts WHERE id=? AND user_id=? LIMIT 1");
+  $st->execute([$id, $uid]);
+  return (bool)$st->fetchColumn();
+}
+function require_contact_access(array $user, string $contact_id): void {
+  if (($user['role'] ?? '') === 'admin') return;
+  if (!contact_belongs_to_user($contact_id, (int)$user['id'])) {
+    http_response_code(403);
+    echo "Permesso negato.";
+    exit;
+  }
+}
+
+function fetch_contacts(array $user): array {
+  $pdo = db();
+  if (($user['role'] ?? '') === 'admin') {
+    $rows = $pdo->query("SELECT * FROM contacts ORDER BY preferito DESC, nome ASC")->fetchAll();
+  } else {
+    $st = $pdo->prepare("SELECT * FROM contacts WHERE user_id=? ORDER BY preferito DESC, nome ASC");
+    $st->execute([(int)$user['id']]);
+    $rows = $st->fetchAll();
+  }
+  foreach ($rows as &$r) $r['preferito'] = (bool)((int)($r['preferito'] ?? 0));
+  return $rows ?: [];
+}
+
+function upsert_contact(array $c): void {
+  $pdo = db();
+  $sql = "
+    INSERT INTO contacts (id, user_id, nome, cognome, telefono, email, avatar, preferito)
+    VALUES (:id, :user_id, :nome, :cognome, :telefono, :email, :avatar, :preferito)
+    ON DUPLICATE KEY UPDATE
+      nome=VALUES(nome),
+      cognome=VALUES(cognome),
+      telefono=VALUES(telefono),
+      email=VALUES(email),
+      avatar=VALUES(avatar),
+      preferito=VALUES(preferito),
+      user_id=VALUES(user_id)
+  ";
+  $st = $pdo->prepare($sql);
+  $st->execute([
+    ':id' => $c['id'],
+    ':user_id' => (int)$c['user_id'],
+    ':nome' => $c['nome'],
+    ':cognome' => $c['cognome'],
+    ':telefono' => $c['telefono'],
+    ':email' => $c['email'],
+    ':avatar' => $c['avatar'],
+    ':preferito' => $c['preferito'] ? 1 : 0,
+  ]);
+}
+
+function delete_contact(string $id): ?string {
+  $pdo = db();
+  $st = $pdo->prepare("SELECT avatar FROM contacts WHERE id=? LIMIT 1");
+  $st->execute([$id]);
+  $avatar = $st->fetchColumn();
+  $del = $pdo->prepare("DELETE FROM contacts WHERE id=?");
+  $del->execute([$id]);
+  return is_string($avatar) ? $avatar : null;
+}
+
+function toggle_fav(string $id): void {
+  $pdo = db();
+  $st = $pdo->prepare("UPDATE contacts SET preferito = IF(preferito=1,0,1) WHERE id=?");
+  $st->execute([$id]);
+}
+
+/* =========================
+   LOGOUT
 ========================= */
 if (isset($_GET['logout'])) {
   session_destroy();
@@ -59,24 +327,30 @@ if (isset($_GET['logout'])) {
   exit();
 }
 
-if (isset($_POST['login_pass'])) {
+/* =========================
+   LOGIN (username + password)
+========================= */
+if (isset($_POST['login_user'], $_POST['login_pass'])) {
+  $usern = trim((string)($_POST['login_user'] ?? ''));
   $pass = (string)($_POST['login_pass'] ?? '');
-  $hash = load_admin_hash($pass_file);
 
-  if ($hash && password_verify($pass, $hash)) {
+  $pdo = db();
+  $st = $pdo->prepare("SELECT id, pass_hash, is_active FROM users WHERE username=? LIMIT 1");
+  $st->execute([$usern]);
+  $row = $st->fetch();
+
+  if ($row && (int)$row['is_active'] === 1 && password_verify($pass, (string)$row['pass_hash'])) {
     session_regenerate_id(true);
-    $_SESSION['user_auth'] = true;
+    $_SESSION['uid'] = (int)$row['id'];
   } else {
-    $error = "Password errata!";
+    $error = "Credenziali non valide!";
   }
 }
 
-function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
-
 /* =========================
-   1b) PAGE: LOGIN UI
+   LOGIN UI
 ========================= */
-if (!isset($_SESSION['user_auth'])): ?>
+if (!current_user()): ?>
 <!doctype html>
 <html lang="it">
 <head>
@@ -85,18 +359,12 @@ if (!isset($_SESSION['user_auth'])): ?>
   <title>Login</title>
   <style>
     :root{
-      --bg1:#0b1020;
-      --bg2:#0a1830;
-      --glass: rgba(255,255,255,.10);
-      --glass2: rgba(255,255,255,.14);
+      --bg1:#0b1020; --bg2:#0a1830;
+      --glass: rgba(255,255,255,.10); --glass2: rgba(255,255,255,.14);
       --stroke: rgba(255,255,255,.18);
-      --text: rgba(255,255,255,.92);
-      --muted: rgba(255,255,255,.70);
+      --text: rgba(255,255,255,.92); --muted: rgba(255,255,255,.70);
       --shadow: 0 20px 60px rgba(0,0,0,.45);
       --radius: 22px;
-      --accent: #7dd3fc;
-      --accent2:#a78bfa;
-      --danger:#fb7185;
     }
     *{box-sizing:border-box}
     html,body{height:100%}
@@ -109,72 +377,40 @@ if (!isset($_SESSION['user_auth'])): ?>
         radial-gradient(900px 600px at 85% 20%, rgba(167,139,250,.22), transparent 55%),
         radial-gradient(800px 700px at 50% 95%, rgba(16,185,129,.12), transparent 60%),
         linear-gradient(180deg, var(--bg1), var(--bg2));
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      padding:24px;
+      display:flex; align-items:center; justify-content:center; padding:24px;
     }
     .card{
       width:min(420px, 100%);
       border-radius: var(--radius);
       background: linear-gradient(180deg, var(--glass2), rgba(255,255,255,.06));
       border: 1px solid var(--stroke);
-      backdrop-filter: blur(18px);
-      -webkit-backdrop-filter: blur(18px);
+      backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px);
       box-shadow: var(--shadow);
       padding: 22px;
-      position:relative;
-      overflow:hidden;
+      position:relative; overflow:hidden;
     }
     .card:before{
-      content:"";
-      position:absolute; inset:-2px;
+      content:""; position:absolute; inset:-2px;
       background: radial-gradient(700px 260px at 30% 0%, rgba(125,211,252,.25), transparent 60%),
                   radial-gradient(700px 260px at 70% 0%, rgba(167,139,250,.20), transparent 55%);
-      pointer-events:none;
-      filter: blur(10px);
-      opacity:.9;
+      pointer-events:none; filter: blur(10px); opacity:.9;
     }
     .inner{position:relative; z-index:1}
-    .brand{
-      display:flex; align-items:center; gap:12px;
-      margin-bottom: 14px;
-    }
-    .logo{
-      width:42px; height:42px; border-radius: 14px;
+    .brand{display:flex; align-items:center; gap:12px; margin-bottom: 14px;}
+    .logo{width:42px; height:42px; border-radius: 14px;
       background: linear-gradient(135deg, rgba(125,211,252,.9), rgba(167,139,250,.85));
       box-shadow: 0 14px 30px rgba(0,0,0,.25);
     }
-    h1{
-      margin:0; font-size:20px; letter-spacing:.2px;
-      font-weight: 650;
-    }
-    .sub{
-      margin: 6px 0 0;
-      color: var(--muted);
-      font-size: 13.5px;
-      line-height: 1.35;
-    }
+    h1{margin:0; font-size:20px; font-weight: 650;}
+    .sub{margin: 6px 0 0; color: var(--muted); font-size: 13.5px; line-height: 1.35;}
     form{margin-top:16px}
-    .field{
-      margin-top: 12px;
-      display:flex;
-      flex-direction:column;
-      gap:8px;
-    }
-    label{
-      color: var(--muted);
-      font-size: 12px;
-    }
+    .field{margin-top: 12px; display:flex; flex-direction:column; gap:8px;}
+    label{color: var(--muted); font-size: 12px;}
     input{
-      width:100%;
-      padding: 14px 14px;
-      border-radius: 16px;
+      width:100%; padding: 14px 14px; border-radius: 16px;
       border: 1px solid rgba(255,255,255,.14);
       background: rgba(0,0,0,.16);
-      color: var(--text);
-      outline:none;
-      transition: .2s ease;
+      color: var(--text); outline:none; transition: .2s ease;
     }
     input:focus{
       border-color: rgba(125,211,252,.55);
@@ -182,35 +418,23 @@ if (!isset($_SESSION['user_auth'])): ?>
       transform: translateY(-1px);
     }
     .btn{
-      margin-top: 14px;
-      width:100%;
-      padding: 13px 14px;
-      border-radius: 16px;
+      margin-top: 14px; width:100%;
+      padding: 13px 14px; border-radius: 16px;
       border: 1px solid rgba(255,255,255,.18);
       background: linear-gradient(135deg, rgba(125,211,252,.95), rgba(167,139,250,.90));
       color: rgba(0,0,0,.88);
-      font-weight: 750;
-      cursor:pointer;
-      transition: .2s ease;
+      font-weight: 750; cursor:pointer; transition: .2s ease;
       box-shadow: 0 18px 40px rgba(0,0,0,.25);
     }
     .btn:hover{ transform: translateY(-1px); filter: brightness(1.02) }
     .btn:active{ transform: translateY(1px); filter: brightness(.98) }
     .error{
-      margin-top: 12px;
-      padding: 10px 12px;
-      border-radius: 14px;
+      margin-top: 12px; padding: 10px 12px; border-radius: 14px;
       border: 1px solid rgba(251,113,133,.35);
       background: rgba(251,113,133,.12);
-      color: rgba(255,255,255,.92);
-      font-size: 13px;
+      color: rgba(255,255,255,.92); font-size: 13px;
     }
-    .foot{
-      margin-top: 14px;
-      color: rgba(255,255,255,.55);
-      font-size: 12px;
-      text-align:center;
-    }
+    .foot{margin-top: 14px; color: rgba(255,255,255,.55); font-size: 12px; text-align:center;}
   </style>
 </head>
 <body>
@@ -220,14 +444,18 @@ if (!isset($_SESSION['user_auth'])): ?>
         <div class="logo"></div>
         <div>
           <h1>Accedi</h1>
-          <div class="sub">Area contatti protetta. Inserisci la password per continuare.</div>
+          <div class="sub">Inserisci username e password.</div>
         </div>
       </div>
 
       <form method="POST" autocomplete="off">
         <div class="field">
+          <label for="u">Username</label>
+          <input id="u" type="text" name="login_user" placeholder="admin" required autofocus />
+        </div>
+        <div class="field">
           <label for="p">Password</label>
-          <input id="p" type="password" name="login_pass" placeholder="••••••••" required autofocus />
+          <input id="p" type="password" name="login_pass" placeholder="••••••••" required />
         </div>
         <button class="btn" type="submit">Entra</button>
       </form>
@@ -243,56 +471,175 @@ if (!isset($_SESSION['user_auth'])): ?>
 </html>
 <?php exit(); endif; ?>
 
-
 <?php
 /* =========================
-   1c) CHANGE PASSWORD (ADMIN)
+   AUTH OK
 ========================= */
-$pass_msg = null;
-$pass_err = null;
+$user = require_auth();
 
-if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST['azione']) && $_POST['azione'] === 'change_pass') {
+/* =========================
+   TOAST
+========================= */
+$toast_msg = $_SESSION['toast_msg'] ?? null;
+$toast_err = $_SESSION['toast_err'] ?? null;
+unset($_SESSION['toast_msg'], $_SESSION['toast_err']);
+
+/* =========================
+   ADMIN ACTIONS (users)
+========================= */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['azione']) && str_starts_with((string)$_POST['azione'], 'admin_')) {
+  if (!hash_equals($_SESSION['csrf'] ?? '', (string)($_POST['csrf'] ?? ''))) {
+    $_SESSION['toast_err'] = "Richiesta non valida (CSRF).";
+    header("Location: index.php");
+    exit();
+  }
+  require_admin($user);
+
+  try {
+    $azione = (string)$_POST['azione'];
+
+    if ($azione === 'admin_create_user') {
+      $new_user = trim((string)($_POST['new_user'] ?? ''));
+      $new_pass = (string)($_POST['new_pass'] ?? '');
+      $new_pass2 = (string)($_POST['new_pass2'] ?? '');
+      $role_in = (string)($_POST['new_role'] ?? 'user');
+      $role = in_array($role_in, ['admin','moderator','user'], true) ? $role_in : 'user';
+
+      if ($new_user === '' || !preg_match('/^[a-zA-Z0-9._-]{3,50}$/', $new_user)) {
+        $_SESSION['toast_err'] = "Username non valido (3-50, solo lettere/numeri . _ -).";
+      } elseif (strlen($new_pass) < 6) {
+        $_SESSION['toast_err'] = "Password troppo corta (min 6).";
+      } elseif ($new_pass !== $new_pass2) {
+        $_SESSION['toast_err'] = "Le password non coincidono.";
+      } else {
+        create_user_admin($new_user, $new_pass, $role);
+        $_SESSION['toast_msg'] = "Utente creato ✅ (" . $new_user . ")";
+      }
+
+    } elseif ($azione === 'admin_set_role') {
+      $uid = (int)($_POST['uid'] ?? 0);
+      $role_in = (string)($_POST['role'] ?? 'user');
+      $role = in_array($role_in, ['admin','moderator','user'], true) ? $role_in : 'user';
+
+      if ($uid === (int)$user['id']) {
+        $_SESSION['toast_err'] = "Non puoi cambiare il tuo ruolo.";
+      } else {
+        set_user_role($uid, $role);
+        $_SESSION['toast_msg'] = "Ruolo aggiornato ✅";
+      }
+
+    } elseif ($azione === 'admin_toggle_active') {
+      $uid = (int)($_POST['uid'] ?? 0);
+      $active = (int)($_POST['active'] ?? 1);
+
+      if ($uid === (int)$user['id']) {
+        $_SESSION['toast_err'] = "Non puoi disattivare te stesso.";
+      } else {
+        if ($active === 0) {
+          $pdo = db();
+          $st = $pdo->prepare("SELECT role, is_active FROM users WHERE id=? LIMIT 1");
+          $st->execute([$uid]);
+          $t = $st->fetch();
+          if ($t && ($t['role'] ?? '') === 'admin' && (int)($t['is_active'] ?? 1) === 1) {
+            if (count_admins_active() <= 1) {
+              $_SESSION['toast_err'] = "Deve rimanere almeno 1 admin attivo.";
+              header("Location: index.php");
+              exit();
+            }
+          }
+        }
+        set_user_active($uid, $active);
+        $_SESSION['toast_msg'] = $active ? "Utente riattivato ✅" : "Utente disattivato ✅";
+      }
+
+    } elseif ($azione === 'admin_delete_user') {
+      $uid = (int)($_POST['uid'] ?? 0);
+
+      if ($uid === (int)$user['id']) {
+        $_SESSION['toast_err'] = "Non puoi eliminare te stesso.";
+      } else {
+        $pdo = db();
+        $st = $pdo->prepare("SELECT role, is_active FROM users WHERE id=? LIMIT 1");
+        $st->execute([$uid]);
+        $t = $st->fetch();
+        if ($t && ($t['role'] ?? '') === 'admin' && (int)($t['is_active'] ?? 1) === 1) {
+          if (count_admins_active() <= 1) {
+            $_SESSION['toast_err'] = "Deve rimanere almeno 1 admin attivo.";
+            header("Location: index.php");
+            exit();
+          }
+        }
+        delete_user($uid);
+        $_SESSION['toast_msg'] = "Utente eliminato ✅";
+      }
+    }
+
+  } catch (Throwable $e) {
+    $_SESSION['toast_err'] = "Errore DB: " . $e->getMessage();
+  }
+
+  header("Location: index.php");
+  exit();
+}
+
+/* =========================
+   CHANGE PASSWORD (utente loggato)
+========================= */
+if ($_SERVER["REQUEST_METHOD"] === "POST" && (string)($_POST['azione'] ?? '') === 'change_pass') {
+  if (!hash_equals($_SESSION['csrf'] ?? '', (string)($_POST['csrf'] ?? ''))) {
+    $_SESSION['toast_err'] = "Richiesta non valida (CSRF).";
+    header("Location: index.php");
+    exit();
+  }
+
   $old = (string)($_POST['old_pass'] ?? '');
   $new = (string)($_POST['new_pass'] ?? '');
   $new2 = (string)($_POST['new_pass2'] ?? '');
 
-  $hash = load_admin_hash($pass_file);
+  $pdo = db();
+  $st = $pdo->prepare("SELECT pass_hash FROM users WHERE id=? LIMIT 1");
+  $st->execute([(int)$user['id']]);
+  $hash = $st->fetchColumn();
 
-  if (!$hash || !password_verify($old, $hash)) {
-    $pass_err = "Password attuale non corretta.";
+  if (!$hash || !password_verify($old, (string)$hash)) {
+    $_SESSION['toast_err'] = "Password attuale non corretta.";
   } elseif (strlen($new) < 6) {
-    $pass_err = "La nuova password deve avere almeno 6 caratteri.";
+    $_SESSION['toast_err'] = "La nuova password deve avere almeno 6 caratteri.";
   } elseif ($new !== $new2) {
-    $pass_err = "Le due password nuove non coincidono.";
+    $_SESSION['toast_err'] = "Le due password nuove non coincidono.";
   } else {
     $new_hash = password_hash($new, PASSWORD_DEFAULT);
-    save_admin_hash($pass_file, $new_hash);
-    $pass_msg = "Password aggiornata con successo ✅";
+    $up = $pdo->prepare("UPDATE users SET pass_hash=? WHERE id=?");
+    $up->execute([$new_hash, (int)$user['id']]);
+    $_SESSION['toast_msg'] = "Password aggiornata ✅";
   }
+
+  header("Location: index.php");
+  exit();
 }
 
 /* =========================
-   2) DATA + CRUD CONTATTI
+   CRUD CONTATTI
 ========================= */
-$json_file = $upload_dir . 'contatti.json';
-$contacts = file_exists($json_file) ? json_decode(file_get_contents($json_file), true) : [];
-if (!is_array($contacts)) $contacts = [];
+if ($_SERVER["REQUEST_METHOD"] === "POST" && (string)($_POST['azione'] ?? '') === 'salva') {
+  if (!hash_equals($_SESSION['csrf'] ?? '', (string)($_POST['csrf'] ?? ''))) {
+    $_SESSION['toast_err'] = "Richiesta non valida (CSRF).";
+    header("Location: index.php");
+    exit();
+  }
 
-function safe_path_inside_uploads($path, $upload_url) {
-  if (!$path) return "";
-  $path = str_replace("\\", "/", (string)$path);
-  if (strpos($path, $upload_url) !== 0) return "";
-  if (strpos($path, "..") !== false) return "";
-  return $path;
-}
+  if (!can_manage_contacts($user)) {
+    http_response_code(403);
+    echo "Permesso negato.";
+    exit;
+  }
 
-function avatar_bg_from_id($id) {
-  $hex = substr(md5((string)$id), 0, 6);
-  return "#".$hex;
-}
-
-if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST['azione']) && $_POST['azione'] === 'salva') {
   $id = !empty($_POST['id']) ? (string)$_POST['id'] : uniqid("c_", true);
+
+  // se aggiorno un contatto esistente, verifica ownership (non-admin)
+  if (!empty($_POST['id'])) {
+    require_contact_access($user, (string)$_POST['id']);
+  }
 
   $old_avatar = safe_path_inside_uploads($_POST['old_avatar'] ?? "", $upload_url);
   $avatar_path = $old_avatar;
@@ -301,6 +648,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST['azione']) && $_POST['
     $orig = (string)($_FILES["avatar"]["name"] ?? "avatar");
     $ext = strtolower(pathinfo($orig, PATHINFO_EXTENSION));
     $allowed = ["jpg","jpeg","png","webp","gif"];
+
     if (in_array($ext, $allowed, true)) {
       $base = preg_replace("/[^a-zA-Z0-9._-]/", "_", pathinfo($orig, PATHINFO_FILENAME));
       $avatar_name = time() . "_" . $base . "." . $ext;
@@ -316,8 +664,15 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST['azione']) && $_POST['
 
   $preferito = (isset($_POST['preferito']) && (string)$_POST['preferito'] === '1');
 
+  // owner: per default user loggato; admin può assegnare ad altro utente
+  $owner_id = (int)$user['id'];
+  if (is_admin($user) && isset($_POST['user_id'])) {
+    $owner_id = max(1, (int)$_POST['user_id']);
+  }
+
   $contact_data = [
     'id' => $id,
+    'user_id' => $owner_id,
     'nome' => trim((string)($_POST['nome'] ?? "")),
     'cognome' => trim((string)($_POST['cognome'] ?? "")),
     'telefono' => trim((string)($_POST['telefono'] ?? "")),
@@ -326,22 +681,7 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && isset($_POST['azione']) && $_POST['
     'preferito' => $preferito
   ];
 
-  $contact_data['nome'] = h($contact_data['nome']);
-  $contact_data['cognome'] = h($contact_data['cognome']);
-  $contact_data['telefono'] = h($contact_data['telefono']);
-  $contact_data['email'] = h($contact_data['email']);
-
-  $found = false;
-  foreach ($contacts as $index => $c) {
-    if (isset($c['id']) && $c['id'] === $id) {
-      $contacts[$index] = $contact_data;
-      $found = true;
-      break;
-    }
-  }
-  if (!$found) $contacts[] = $contact_data;
-
-  file_put_contents($json_file, json_encode(array_values($contacts), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+  upsert_contact($contact_data);
   header("Location: index.php");
   exit();
 }
@@ -350,32 +690,38 @@ if (isset($_GET['action'], $_GET['id'])) {
   $action = (string)$_GET['action'];
   $id = (string)$_GET['id'];
 
-  foreach ($contacts as $k => $v) {
-    if (($v['id'] ?? '') === $id) {
-      if ($action === 'delete') {
-        $av = safe_path_inside_uploads($v['avatar'] ?? "", $upload_url);
-        if (!empty($av) && file_exists(__DIR__ . "/" . $av)) @unlink(__DIR__ . "/" . $av);
-        unset($contacts[$k]);
-      } elseif ($action === 'toggle_fav') {
-        $contacts[$k]['preferito'] = !((bool)($contacts[$k]['preferito'] ?? false));
-      }
-      break;
-    }
+  if (!can_manage_contacts($user)) {
+    http_response_code(403);
+    echo "Permesso negato.";
+    exit;
   }
 
-  file_put_contents($json_file, json_encode(array_values($contacts), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+  require_contact_access($user, $id);
+
+  if ($action === 'delete') {
+    $avatar = delete_contact($id);
+    $av = safe_path_inside_uploads($avatar ?? "", $upload_url);
+    if (!empty($av) && file_exists(__DIR__ . "/" . $av)) @unlink(__DIR__ . "/" . $av);
+  } elseif ($action === 'toggle_fav') {
+    toggle_fav($id);
+  }
+
   header("Location: index.php");
   exit();
 }
 
-usort($contacts, function($a, $b) {
-  $ap = (int)!!($a['preferito'] ?? false);
-  $bp = (int)!!($b['preferito'] ?? false);
-  if ($ap !== $bp) return $bp - $ap;
-  return strcmp((string)($a['nome'] ?? ''), (string)($b['nome'] ?? ''));
-});
-
+/* =========================
+   DATA FOR UI
+========================= */
+$contacts = fetch_contacts($user);
 $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+$users = is_admin($user) ? fetch_users() : [];
+$users_json = json_encode($users, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
+$users_select = is_admin($user) ? fetch_users_for_select() : [];
+$users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+
 ?>
 <!doctype html>
 <html lang="it">
@@ -396,10 +742,7 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
       --shadow: 0 24px 70px rgba(0,0,0,.48);
       --radius: 22px;
       --radius2: 18px;
-      --accent:#7dd3fc;
-      --accent2:#a78bfa;
       --danger:#fb7185;
-      --ok:#34d399;
     }
     *{box-sizing:border-box}
     html,body{height:100%}
@@ -634,7 +977,6 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
       text-align:center;
     }
 
-    /* mini toast */
     .toast{
       width:min(980px, 100%);
       margin: 10px auto 0;
@@ -657,7 +999,6 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
       font-size: 13px;
     }
 
-    /* overlay + sheet: (il tuo codice originale sotto non lo tocco) */
     .overlay{ position:fixed; inset:0; z-index:200; display:none; flex-direction:column; background: rgba(0,0,0,.7); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); }
     .overlayTop{ position:sticky; top:0; z-index:5; padding:max(14px, env(safe-area-inset-top)) 16px 12px 16px; border-bottom:1px solid rgba(255,255,255,.10); background: rgba(12,18,36,.55); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); }
     .overlayTopInner{ width:min(980px, 100%); margin:0 auto; display:flex; align-items:center; justify-content:space-between; gap:10px; }
@@ -689,8 +1030,11 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
     .grid{ display:grid; grid-template-columns: 1fr; gap:10px; }
     .f{ display:flex; flex-direction:column; gap:7px; }
     .f label{ font-size:12px; color: rgba(255,255,255,.60); }
-    .f input{ width:100%; padding:13px 14px; border-radius:18px; border:1px solid rgba(255,255,255,.14); background: rgba(0,0,0,.14); color: var(--text); outline:none; transition:.18s ease; }
-    .f input:focus{ border-color: rgba(125,211,252,.55); box-shadow: 0 0 0 4px rgba(125,211,252,.14); transform: translateY(-1px); }
+    .f input, .f select{
+      width:100%; padding:13px 14px; border-radius:18px; border:1px solid rgba(255,255,255,.14);
+      background: rgba(0,0,0,.14); color: var(--text); outline:none; transition:.18s ease;
+    }
+    .f input:focus, .f select:focus{ border-color: rgba(125,211,252,.55); box-shadow: 0 0 0 4px rgba(125,211,252,.14); transform: translateY(-1px); }
     .sheetActions{ display:flex; gap:10px; justify-content:flex-end; padding:12px 16px 16px; border-top:1px solid rgba(255,255,255,.10); }
     .btn{ border:none; cursor:pointer; border-radius:18px; padding:12px 14px; font-weight: 850; transition:.18s ease; user-select:none; }
     .btnGhost{ background: rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.14); color: rgba(255,255,255,.85); }
@@ -706,15 +1050,20 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
         <div class="appdot"></div>
         <div style="min-width:0">
           <h1>Contatti</h1>
-          <div class="subtitle">UI “Liquid Glass” · Mobile-first · <?= count($contacts) ?> contatti</div>
+          <div class="subtitle">
+            <?= h($user['username']) ?> (<?= h($user['role']) ?>) · <?= count($contacts) ?> contatti
+            <?php if (!is_admin($user)): ?> · solo i tuoi contatti<?php endif; ?>
+          </div>
         </div>
       </div>
 
       <div class="actions">
         <button class="iconbtn" onclick="openEdit(null)" aria-label="Nuovo contatto" title="Nuovo">➕</button>
-
-        <!-- NUOVO: cambio password -->
         <button class="iconbtn" onclick="openPass()" aria-label="Cambia password" title="Cambia password">🔒</button>
+
+        <?php if (is_admin($user)): ?>
+          <button class="iconbtn" onclick="openUsersAdmin()" aria-label="Gestione utenti" title="Gestione utenti">👥</button>
+        <?php endif; ?>
 
         <a class="logout" href="?logout=1">Esci</a>
       </div>
@@ -733,10 +1082,10 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
     </div>
   </div>
 
-  <?php if ($pass_msg || $pass_err): ?>
+  <?php if ($toast_msg || $toast_err): ?>
     <div class="toast">
-      <?php if ($pass_msg): ?><div class="msg"><?= h($pass_msg) ?></div><?php endif; ?>
-      <?php if ($pass_err): ?><div class="err"><?= h($pass_err) ?></div><?php endif; ?>
+      <?php if ($toast_msg): ?><div class="msg"><?= h($toast_msg) ?></div><?php endif; ?>
+      <?php if ($toast_err): ?><div class="err"><?= h($toast_err) ?></div><?php endif; ?>
     </div>
   <?php endif; ?>
 
@@ -794,7 +1143,7 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
     </div>
   </div>
 
-  <!-- EDIT SHEET (tuo originale) -->
+  <!-- EDIT SHEET -->
   <div id="editSheetWrap" class="sheetWrap" onclick="sheetBackdropClose(event)">
     <div class="sheet" role="dialog" aria-modal="true" aria-label="Modifica contatto">
       <div class="handle"></div>
@@ -802,7 +1151,7 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
         <div>
           <p id="etitle" class="sheetTitle">Crea contatto</p>
           <div style="color:rgba(255,255,255,.55); font-size:12px; margin-top:4px;">
-            Salvataggio su file JSON (locale)
+            Salvataggio su MySQL · <?= is_admin($user) ? "admin (tutti)" : "solo tuoi contatti" ?>
           </div>
         </div>
         <button class="iconbtn" onclick="closeEdit()" aria-label="Chiudi">✕</button>
@@ -811,9 +1160,17 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
       <form action="index.php" method="POST" enctype="multipart/form-data">
         <div class="sheetBody">
           <input type="hidden" name="azione" value="salva">
+          <input type="hidden" name="csrf" value="<?= h($CSRF) ?>">
           <input type="hidden" name="id" id="e_id">
           <input type="hidden" name="old_avatar" id="e_old_avatar">
           <input type="hidden" name="preferito" id="e_preferito">
+
+          <?php if (is_admin($user)): ?>
+            <div class="f" style="margin-bottom:10px;">
+              <label for="e_user_id">Assegna a utente</label>
+              <select name="user_id" id="e_user_id"></select>
+            </div>
+          <?php endif; ?>
 
           <div class="grid">
             <div class="f">
@@ -847,15 +1204,15 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
     </div>
   </div>
 
-  <!-- NUOVO: CHANGE PASSWORD SHEET -->
+  <!-- CHANGE PASSWORD SHEET -->
   <div id="passSheetWrap" class="sheetWrap" onclick="passBackdropClose(event)">
-    <div class="sheet" role="dialog" aria-modal="true" aria-label="Cambia password admin">
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="Cambia password">
       <div class="handle"></div>
       <div class="sheetTop">
         <div>
           <p class="sheetTitle">Cambia password</p>
           <div style="color:rgba(255,255,255,.55); font-size:12px; margin-top:4px;">
-            Password salvata in: <span style="opacity:.9"><?= h($upload_url) ?>admin_pass.json</span>
+            Utente: <b><?= h($user['username']) ?></b>
           </div>
         </div>
         <button class="iconbtn" onclick="closePass()" aria-label="Chiudi">✕</button>
@@ -864,6 +1221,7 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
       <form action="index.php" method="POST" autocomplete="off">
         <div class="sheetBody">
           <input type="hidden" name="azione" value="change_pass">
+          <input type="hidden" name="csrf" value="<?= h($CSRF) ?>">
 
           <div class="grid">
             <div class="f">
@@ -891,8 +1249,69 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
     </div>
   </div>
 
+  <!-- USERS ADMIN SHEET -->
+  <?php if (is_admin($user)): ?>
+  <div id="usersSheetWrap" class="sheetWrap" onclick="usersBackdropClose(event)">
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="Gestione utenti">
+      <div class="handle"></div>
+      <div class="sheetTop">
+        <div>
+          <p class="sheetTitle">Gestione utenti</p>
+          <div style="color:rgba(255,255,255,.55); font-size:12px; margin-top:4px;">
+            admin / moderator / user · attiva/disattiva · elimina
+          </div>
+        </div>
+        <button class="iconbtn" onclick="closeUsersAdmin()" aria-label="Chiudi">✕</button>
+      </div>
+
+      <div class="sheetBody">
+        <div class="card" style="margin-top:0;">
+          <div class="cardHeader">Crea nuovo utente</div>
+          <form action="index.php" method="POST" autocomplete="off" style="padding:14px 16px 16px;">
+            <input type="hidden" name="azione" value="admin_create_user">
+            <input type="hidden" name="csrf" value="<?= h($CSRF) ?>">
+
+            <div class="grid">
+              <div class="f">
+                <label>Username *</label>
+                <input name="new_user" required placeholder="es. mario.rossi">
+              </div>
+              <div class="f">
+                <label>Password *</label>
+                <input type="password" name="new_pass" required>
+              </div>
+              <div class="f">
+                <label>Ripeti password *</label>
+                <input type="password" name="new_pass2" required>
+              </div>
+              <div class="f">
+                <label>Ruolo</label>
+                <select name="new_role">
+                  <option value="user">user</option>
+                  <option value="moderator">moderator</option>
+                  <option value="admin">admin</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="sheetActions" style="padding:12px 0 0;border-top:none;">
+              <button type="submit" class="btn btnPrimary">Crea</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="cardHeader">Tutti gli utenti</div>
+          <div id="usersList" style="padding:10px 10px 14px;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <?php endif; ?>
+
 <script>
   const ALL_CONTACTS = <?= $contacts_json ?: "[]" ?>;
+  const IS_ADMIN = <?= is_admin($user) ? 'true' : 'false' ?>;
 
   let currentTab = "all";
   let currentQuery = "";
@@ -1073,6 +1492,22 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
     document.body.style.overflow = "";
   }
 
+  // ====== EDIT SHEET ======
+  const USERS_SELECT = <?= $users_select_json ?: "[]" ?>;
+
+  function fillUserSelect(selectedId){
+    const sel = $("e_user_id");
+    if (!sel) return;
+    sel.innerHTML = "";
+    for (const u of USERS_SELECT) {
+      const opt = document.createElement("option");
+      opt.value = u.id;
+      opt.textContent = `${u.username} (${u.role})`;
+      sel.appendChild(opt);
+    }
+    if (selectedId) sel.value = String(selectedId);
+  }
+
   function openEdit(c=null){
     closeView();
 
@@ -1085,12 +1520,14 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
       $("e_email").value = c.email || "";
       $("e_old_avatar").value = c.avatar || "";
       $("e_preferito").value = c.preferito ? "1" : "0";
+      if (IS_ADMIN) fillUserSelect(c.user_id || "");
     } else {
       $("etitle").textContent = "Crea contatto";
       document.querySelector("#editSheetWrap form").reset();
       $("e_id").value = "";
       $("e_old_avatar").value = "";
       $("e_preferito").value = "0";
+      if (IS_ADMIN) fillUserSelect("");
     }
 
     $("editSheetWrap").style.display = "flex";
@@ -1107,9 +1544,8 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
     if (e.target && e.target.id === "editSheetWrap") closeEdit();
   }
 
-  // NUOVO: password sheet
+  // ====== PASS SHEET ======
   function openPass(){
-    // chiudo eventuale overlay
     closeView();
     $("passSheetWrap").style.display = "flex";
     document.body.style.overflow = "hidden";
@@ -1123,11 +1559,122 @@ $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_
     if (e.target && e.target.id === "passSheetWrap") closePass();
   }
 
+  // ====== USERS ADMIN ======
+  <?php if (is_admin($user)): ?>
+    const ALL_USERS = <?= $users_json ?: "[]" ?>;
+    const CSRF = <?= json_encode($CSRF) ?>;
+    const MY_UID = <?= (int)$user['id'] ?>;
+
+    function openUsersAdmin(){
+      closeView();
+      renderUsersAdmin();
+      $("usersSheetWrap").style.display = "flex";
+      document.body.style.overflow = "hidden";
+    }
+    function closeUsersAdmin(){
+      $("usersSheetWrap").style.display = "none";
+      document.body.style.overflow = "";
+    }
+    function usersBackdropClose(e){
+      if (e.target && e.target.id === "usersSheetWrap") closeUsersAdmin();
+    }
+
+    function postAdmin(action, payload){
+      const f = document.createElement("form");
+      f.method = "POST";
+      f.action = "index.php";
+      const add = (k,v) => {
+        const i = document.createElement("input");
+        i.type = "hidden";
+        i.name = k;
+        i.value = String(v);
+        f.appendChild(i);
+      };
+      add("azione", action);
+      add("csrf", CSRF);
+      Object.entries(payload || {}).forEach(([k,v]) => add(k,v));
+      document.body.appendChild(f);
+      f.submit();
+    }
+
+    function renderUsersAdmin(){
+      const box = $("usersList");
+      box.innerHTML = "";
+
+      for (const u of ALL_USERS) {
+        const row = document.createElement("div");
+        row.className = "row";
+        row.style.alignItems = "center";
+
+        const left = document.createElement("div");
+        left.className = "rowMain";
+
+        const label = document.createElement("div");
+        label.className = "rowLabel";
+        label.textContent = `ID: ${u.id} · ${u.is_active ? "attivo" : "disattivo"}`;
+
+        const val = document.createElement("div");
+        val.className = "rowValue";
+        val.textContent = `${u.username} (${u.role})`;
+
+        left.appendChild(label);
+        left.appendChild(val);
+
+        const acts = document.createElement("div");
+        acts.style.display = "flex";
+        acts.style.gap = "8px";
+        acts.style.flex = "0 0 auto";
+
+        const isMe = (parseInt(u.id) === MY_UID);
+
+        const roleBtn = document.createElement("button");
+        roleBtn.type = "button";
+        roleBtn.className = "btn btnGhost";
+        roleBtn.style.padding = "10px 12px";
+
+        const nextRole = (u.role === "user") ? "moderator" : (u.role === "moderator") ? "admin" : "user";
+        roleBtn.textContent = `Ruolo: → ${nextRole}`;
+        roleBtn.disabled = isMe;
+        roleBtn.onclick = () => postAdmin("admin_set_role", { uid: u.id, role: nextRole });
+
+        const actBtn = document.createElement("button");
+        actBtn.type = "button";
+        actBtn.className = "btn btnGhost";
+        actBtn.style.padding = "10px 12px";
+        actBtn.textContent = u.is_active ? "Disattiva" : "Attiva";
+        actBtn.disabled = isMe;
+        actBtn.onclick = () => postAdmin("admin_toggle_active", { uid: u.id, active: u.is_active ? 0 : 1 });
+
+        const delBtn = document.createElement("button");
+        delBtn.type = "button";
+        delBtn.className = "btn btnDanger";
+        delBtn.style.padding = "10px 12px";
+        delBtn.textContent = "Elimina";
+        delBtn.disabled = isMe;
+        delBtn.onclick = () => {
+          if (confirm(`Eliminare utente "${u.username}"?`)) {
+            postAdmin("admin_delete_user", { uid: u.id });
+          }
+        };
+
+        acts.appendChild(roleBtn);
+        acts.appendChild(actBtn);
+        acts.appendChild(delBtn);
+
+        row.appendChild(left);
+        row.appendChild(acts);
+
+        box.appendChild(row);
+      }
+    }
+  <?php endif; ?>
+
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
-      if ($("passSheetWrap").style.display === "flex") closePass();
-      if ($("editSheetWrap").style.display === "flex") closeEdit();
-      if ($("viewOverlay").style.display === "flex") closeView();
+      if ($("usersSheetWrap")?.style.display === "flex") closeUsersAdmin?.();
+      if ($("passSheetWrap")?.style.display === "flex") closePass();
+      if ($("editSheetWrap")?.style.display === "flex") closeEdit();
+      if ($("viewOverlay")?.style.display === "flex") closeView();
     }
   });
 
