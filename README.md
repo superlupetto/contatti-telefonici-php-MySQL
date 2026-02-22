@@ -43,7 +43,9 @@ CREATE TABLE users (
  UserManagementPanel/
  │
  ├── index.php
+ 
  └── README.md
+ 
 
 ## 🔄 Installazione
 
