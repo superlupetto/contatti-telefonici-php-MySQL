@@ -165,7 +165,7 @@ if (!is_dir($upload_dir)) @mkdir($upload_dir, 0777, true);
 
 /** Bootstrap admin (solo prima installazione) */
 $bootstrap_admin_user = "admin";
-$bootstrap_admin_pass = "lunabella";
+$bootstrap_admin_pass = "nome";
 
 /** DB config */
 define('DB_HOST', 'localhost');
