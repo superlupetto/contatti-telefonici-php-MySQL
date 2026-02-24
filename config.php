@@ -165,13 +165,13 @@ if (!is_dir($upload_dir)) @mkdir($upload_dir, 0777, true);
 
 /** Bootstrap admin (solo prima installazione) */
 $bootstrap_admin_user = "admin";
-$bootstrap_admin_pass = "lunabella";
+$bootstrap_admin_pass = "nome";
 
 /** DB config */
 define('DB_HOST', 'localhost');
 define('DB_NAME', 'rubrica');
 define('DB_USER', 'root');
-define('DB_PASS', 'homecasaluna'); // <-- metti la tua password DB
+define('DB_PASS', 'pass'); // <-- metti la tua password DB
 
 if (!function_exists('str_starts_with')) {
   function str_starts_with(string $haystack, string $needle): bool {
