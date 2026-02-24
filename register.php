@@ -11,20 +11,29 @@ $toast_msg = $_SESSION['toast_msg'] ?? null;
 $toast_err = $_SESSION['toast_err'] ?? null;
 unset($_SESSION['toast_msg'], $_SESSION['toast_err']);
 
+$saved_username = $_SESSION['saved_username'] ?? '';
+$save_username_checked = !empty($saved_username);
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
   if (!hash_equals($_SESSION['csrf'] ?? '', (string)($_POST['csrf'] ?? ''))) {
-    $toast_err = "Richiesta non valida (CSRF). Riprova.";
+    $toast_err = t('error_csrf');
   } else {
     $username = trim((string)($_POST['username'] ?? ''));
     $pass1 = (string)($_POST['password'] ?? '');
     $pass2 = (string)($_POST['password2'] ?? '');
 
+    if (!empty($_POST['save_username']) && $username !== '') {
+      $_SESSION['saved_username'] = $username;
+    }
+    $save_username_checked = !empty($_POST['save_username']);
+    $saved_username = $username;
+
     if ($username === '' || !preg_match('/^[a-zA-Z0-9._-]{3,50}$/', $username)) {
-      $toast_err = "Username non valido (3-50, solo lettere/numeri . _ -).";
+      $toast_err = t('error_username_invalid');
     } elseif (strlen($pass1) < 6) {
-      $toast_err = "Password troppo corta (min 6).";
+      $toast_err = t('error_password_short');
     } elseif ($pass1 !== $pass2) {
-      $toast_err = "Le password non coincidono.";
+      $toast_err = t('error_password_mismatch');
     } else {
       try {
         $pdo = db();
@@ -32,29 +41,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $st = $pdo->prepare("INSERT INTO users (username, pass_hash, role, is_active) VALUES (?, ?, 'user', 1)");
         $st->execute([$username, $hash]);
 
-        $_SESSION['toast_msg'] = "Account creato ✅ Ora puoi accedere.";
+        $_SESSION['saved_username'] = $username;
+        $_SESSION['toast_msg'] = t('msg_account_created');
         header("Location: login.php");
         exit();
       } catch (PDOException $e) {
         // 23000 = integrity constraint violation (es. username già usato)
         if ((string)$e->getCode() === '23000') {
-          $toast_err = "Username già esistente. Scegline un altro.";
+          $toast_err = t('error_username_exists');
         } else {
-          $toast_err = "Errore durante la registrazione: " . $e->getMessage();
+          $toast_err = t('error_register') . $e->getMessage();
         }
       } catch (Throwable $e) {
-        $toast_err = "Errore durante la registrazione: " . $e->getMessage();
+        $toast_err = t('error_register') . $e->getMessage();
       }
     }
   }
 }
 ?>
 <!doctype html>
-<html lang="it">
+<html lang="<?= htmlspecialchars($CURRENT_LANG) ?>">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Registrati</title>
+  <title><?= t('register_title') ?></title>
   <style>
     :root{
       --bg1:#0b1020; --bg2:#0a1830;
@@ -126,6 +136,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     .btn:hover{ transform: translateY(-1px); filter: brightness(1.02) }
     .btn:active{ transform: translateY(1px); filter: brightness(.98) }
+    .checkRow{margin-top:10px;display:flex;align-items:center;gap:10px;cursor:pointer;}
+    .checkRow input[type="checkbox"]{width:18px;height:18px;accent-color:rgba(125,211,252,.9);cursor:pointer;}
+    .checkRow span{color:var(--muted);font-size:13px;user-select:none;}
 
     .btnGhost{
       margin-top: 10px;
@@ -160,16 +173,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
     .alerts > :last-child{ margin-bottom: 0; }
     .foot{margin-top: 14px; color: rgba(255,255,255,.55); font-size: 12px; text-align:center;}
+    .btnLang{position:fixed;top:16px;right:16px;z-index:100;padding:8px 14px;border-radius:12px;border:1px solid rgba(255,255,255,.2);background:rgba(255,255,255,.08);color:rgba(255,255,255,.9);text-decoration:none;font-size:13px;font-weight:600;cursor:pointer;transition:.18s ease;display:inline-flex;align-items:center;gap:8px;}
+    .btnLang:hover{background:rgba(255,255,255,.14);transform:translateY(-1px)}
+    .sheetWrap{position:fixed;inset:0;z-index:200;display:none;align-items:flex-end;justify-content:center;background:rgba(0,0,0,.48);backdrop-filter:blur(8px);padding:16px;}
+    .sheetWrap.show{display:flex;}
+    .sheet{width:min(360px,100%);border-radius:24px;border:1px solid rgba(255,255,255,.16);background:linear-gradient(180deg,rgba(255,255,255,.12),rgba(255,255,255,.06));backdrop-filter:blur(18px);box-shadow:0 24px 60px rgba(0,0,.5);overflow:hidden;animation:sheetPop .22s ease forwards;}
+    @keyframes sheetPop{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+    .sheetTop{padding:14px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,.1);}
+    .sheetTitle{margin:0;font-size:16px;font-weight:700;}
+    .sheetBody{padding:12px 16px 16px;}
+    .langItem{display:flex;align-items:center;padding:12px 14px;border-radius:14px;text-decoration:none;color:rgba(255,255,255,.9);font-weight:600;transition:.15s ease;margin-bottom:6px;}
+    .langItem:hover{background:rgba(255,255,255,.1)}
+    .langItem.active{background:linear-gradient(135deg,rgba(125,211,252,.3),rgba(167,139,250,.3));border:1px solid rgba(255,255,255,.2);}
+    .iconbtn{width:36px;height:36px;border-radius:12px;border:none;background:rgba(255,255,255,.08);color:rgba(255,255,255,.9);cursor:pointer;display:grid;place-items:center;font-size:18px;}
+    .iconbtn:hover{background:rgba(255,255,255,.12)}
   </style>
 </head>
 <body>
+  <button type="button" class="btnLang" onclick="document.getElementById('langSheetWrap').classList.add('show')" aria-label="<?= t('label_language') ?>" aria-haspopup="dialog">🌐 <?= t('label_language') ?></button>
+
+  <div id="langSheetWrap" class="sheetWrap" role="dialog" aria-modal="true" aria-label="<?= t('sheet_language') ?>" onclick="if(event.target===this)this.classList.remove('show')">
+    <div class="sheet" onclick="event.stopPropagation()">
+      <div class="sheetTop">
+        <h2 class="sheetTitle"><?= t('sheet_language') ?></h2>
+        <button type="button" class="iconbtn" onclick="document.getElementById('langSheetWrap').classList.remove('show')" aria-label="<?= t('btn_close') ?>">✕</button>
+      </div>
+      <div class="sheetBody">
+        <?php foreach ($AVAILABLE_LANGS as $code => $label): ?>
+          <a href="?lang=<?= $code ?>" class="langItem <?= $code === $CURRENT_LANG ? 'active' : '' ?>" hreflang="<?= $code ?>"><?= h($label) ?></a>
+        <?php endforeach; ?>
+      </div>
+    </div>
+  </div>
   <div class="card">
     <div class="inner">
       <div class="brand">
         <div class="logo"></div>
         <div>
-          <h1>Registrati</h1>
-          <div class="sub">Crea un nuovo account.</div>
+          <h1><?= t('register_title') ?></h1>
+          <div class="sub"><?= t('register_subtitle') ?></div>
         </div>
       </div>
 
@@ -186,24 +228,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <input type="hidden" name="csrf" value="<?= h($CSRF) ?>">
 
         <div class="field">
-          <label for="u">Username</label>
-          <input id="u" type="text" name="username" placeholder="es. mario.rossi" required autofocus />
+          <label for="u"><?= t('label_username') ?></label>
+          <input id="u" type="text" name="username" placeholder="<?= t('placeholder_username_register') ?>" value="<?= h($saved_username) ?>" required autofocus />
         </div>
         <div class="field">
-          <label for="p1">Password</label>
-          <input id="p1" type="password" name="password" placeholder="Min 6 caratteri" required />
+          <label for="p1"><?= t('label_password') ?></label>
+          <input id="p1" type="password" name="password" placeholder="<?= t('placeholder_password_min') ?>" required />
         </div>
         <div class="field">
-          <label for="p2">Ripeti password</label>
-          <input id="p2" type="password" name="password2" placeholder="Ripeti password" required />
+          <label for="p2"><?= t('label_password_repeat') ?></label>
+          <input id="p2" type="password" name="password2" placeholder="<?= t('placeholder_password_repeat') ?>" required />
         </div>
 
-        <button class="btn" type="submit">Crea account</button>
+        <label class="checkRow">
+          <input type="checkbox" name="save_username" value="1" <?= $save_username_checked ? 'checked' : '' ?> />
+          <span><?= t('btn_save_username') ?></span>
+        </label>
+        <button class="btn" type="submit"><?= t('btn_create_account') ?></button>
       </form>
 
-      <a class="btnGhost" href="login.php">Hai già un account? Accedi</a>
+      <a class="btnGhost" href="login.php"><?= t('link_have_account') ?></a>
     </div>
   </div>
+  <script>
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'Escape') document.getElementById('langSheetWrap').classList.remove('show');
+    });
+  </script>
 </body>
 </html>
 

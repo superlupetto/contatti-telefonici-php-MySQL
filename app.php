@@ -27,7 +27,7 @@ unset($_SESSION['toast_msg'], $_SESSION['toast_err']);
 ========================= */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['azione']) && str_starts_with((string)$_POST['azione'], 'admin_')) {
   if (!hash_equals($_SESSION['csrf'] ?? '', (string)($_POST['csrf'] ?? ''))) {
-    $_SESSION['toast_err'] = "Richiesta non valida (CSRF).";
+    $_SESSION['toast_err'] = t('error_csrf_req');
     header("Location: app.php");
     exit();
   }
@@ -44,14 +44,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['azione']) && str_star
       $role = in_array($role_in, ['admin','user'], true) ? $role_in : 'user';
 
       if ($new_user === '' || !preg_match('/^[a-zA-Z0-9._-]{3,50}$/', $new_user)) {
-        $_SESSION['toast_err'] = "Username non valido (3-50, solo lettere/numeri . _ -).";
+        $_SESSION['toast_err'] = t('error_username_invalid');
       } elseif (strlen($new_pass) < 6) {
-        $_SESSION['toast_err'] = "Password troppo corta (min 6).";
+        $_SESSION['toast_err'] = t('error_password_short');
       } elseif ($new_pass !== $new_pass2) {
-        $_SESSION['toast_err'] = "Le password non coincidono.";
+        $_SESSION['toast_err'] = t('error_password_mismatch');
       } else {
         create_user_admin($new_user, $new_pass, $role);
-        $_SESSION['toast_msg'] = "Utente creato ✅ (" . $new_user . ")";
+        $_SESSION['toast_msg'] = t('msg_user_created') . $new_user . ")";
       }
 
     } elseif ($azione === 'admin_set_role') {
@@ -60,7 +60,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['azione']) && str_star
       $role = in_array($role_in, ['admin','user'], true) ? $role_in : 'user';
 
       if ($uid <= 0) {
-        $_SESSION['toast_err'] = "Utente non valido.";
+        $_SESSION['toast_err'] = t('error_invalid_user');
       } else {
         $pdo = db();
         $st = $pdo->prepare("SELECT username FROM users WHERE id=? LIMIT 1");
@@ -68,12 +68,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['azione']) && str_star
         $uname = (string)$st->fetchColumn();
 
         if ($uname === 'admin') {
-          $_SESSION['toast_err'] = "L'utente admin non può cambiare ruolo.";
+          $_SESSION['toast_err'] = t('error_admin_no_role');
         } elseif ($uid === (int)$user['id']) {
-          $_SESSION['toast_err'] = "Non puoi cambiare il tuo ruolo.";
+          $_SESSION['toast_err'] = t('error_cant_change_self_role');
         } else {
           set_user_role($uid, $role);
-          $_SESSION['toast_msg'] = "Ruolo aggiornato ✅";
+          $_SESSION['toast_msg'] = t('msg_role_updated');
         }
       }
 
@@ -82,7 +82,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['azione']) && str_star
       $active = (int)($_POST['active'] ?? 1);
 
       if ($uid === (int)$user['id']) {
-        $_SESSION['toast_err'] = "Non puoi disattivare te stesso.";
+        $_SESSION['toast_err'] = t('error_cant_deactivate_self');
       } else {
         if ($active === 0) {
           $pdo = db();
@@ -90,46 +90,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['azione']) && str_star
           $st->execute([$uid]);
           $t = $st->fetch();
           if ($t && ($t['username'] ?? '') === 'admin') {
-            $_SESSION['toast_err'] = "L'utente admin non può essere disattivato.";
+            $_SESSION['toast_err'] = t('error_admin_no_deactivate');
             header("Location: app.php");
             exit();
           }
           if ($t && ($t['role'] ?? '') === 'admin' && (int)($t['is_active'] ?? 1) === 1) {
             if (count_admins_active() <= 1) {
-              $_SESSION['toast_err'] = "Deve rimanere almeno 1 admin attivo.";
+              $_SESSION['toast_err'] = t('error_min_one_admin');
               header("Location: app.php");
               exit();
             }
           }
         }
         set_user_active($uid, $active);
-        $_SESSION['toast_msg'] = $active ? "Utente riattivato ✅" : "Utente disattivato ✅";
+        $_SESSION['toast_msg'] = $active ? t('msg_user_reactivated') : t('msg_user_deactivated');
       }
 
     } elseif ($azione === 'admin_delete_user') {
       $uid = (int)($_POST['uid'] ?? 0);
 
       if ($uid === (int)$user['id']) {
-        $_SESSION['toast_err'] = "Non puoi eliminare te stesso.";
+        $_SESSION['toast_err'] = t('error_cant_delete_self');
       } else {
         $pdo = db();
         $st = $pdo->prepare("SELECT username, role, is_active FROM users WHERE id=? LIMIT 1");
         $st->execute([$uid]);
         $t = $st->fetch();
         if ($t && ($t['username'] ?? '') === 'admin') {
-          $_SESSION['toast_err'] = "L'utente admin non può essere eliminato.";
+          $_SESSION['toast_err'] = t('error_admin_no_delete');
           header("Location: app.php");
           exit();
         }
         if ($t && ($t['role'] ?? '') === 'admin' && (int)($t['is_active'] ?? 1) === 1) {
           if (count_admins_active() <= 1) {
-            $_SESSION['toast_err'] = "Deve rimanere almeno 1 admin attivo.";
+            $_SESSION['toast_err'] = t('error_min_one_admin');
             header("Location: app.php");
             exit();
           }
         }
         delete_user($uid);
-        $_SESSION['toast_msg'] = "Utente eliminato ✅";
+        $_SESSION['toast_msg'] = t('msg_user_deleted');
       }
 
     } elseif ($azione === 'admin_set_password') {
@@ -138,16 +138,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['azione']) && str_star
       $p2 = (string)($_POST['new_pass2'] ?? '');
 
       if ($uid <= 0) {
-        $_SESSION['toast_err'] = "Utente non valido.";
+        $_SESSION['toast_err'] = t('error_invalid_user');
       } elseif ($uid === (int)$user['id']) {
-        $_SESSION['toast_err'] = "Per il tuo utente usa: Cambia password (🔒).";
+        $_SESSION['toast_err'] = t('error_use_change_pass');
       } elseif (strlen($p1) < 6) {
-        $_SESSION['toast_err'] = "Password troppo corta (min 6).";
+        $_SESSION['toast_err'] = t('error_password_short');
       } elseif ($p1 !== $p2) {
-        $_SESSION['toast_err'] = "Le password non coincidono.";
+        $_SESSION['toast_err'] = t('error_password_mismatch');
       } else {
         set_user_password($uid, $p1);
-        $_SESSION['toast_msg'] = "Password aggiornata ✅";
+        $_SESSION['toast_msg'] = t('msg_password_updated');
       }
     }
 
@@ -164,7 +164,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['azione']) && str_star
 ========================= */
 if ($_SERVER["REQUEST_METHOD"] === "POST" && (string)($_POST['azione'] ?? '') === 'change_pass') {
   if (!hash_equals($_SESSION['csrf'] ?? '', (string)($_POST['csrf'] ?? ''))) {
-    $_SESSION['toast_err'] = "Richiesta non valida (CSRF).";
+    $_SESSION['toast_err'] = t('error_csrf_req');
     header("Location: app.php");
     exit();
   }
@@ -179,16 +179,16 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && (string)($_POST['azione'] ?? '') ==
   $hash = $st->fetchColumn();
 
   if (!$hash || !password_verify($old, (string)$hash)) {
-    $_SESSION['toast_err'] = "Password attuale non corretta.";
+    $_SESSION['toast_err'] = t('error_wrong_password');
   } elseif (strlen($new) < 6) {
-    $_SESSION['toast_err'] = "La nuova password deve avere almeno 6 caratteri.";
+    $_SESSION['toast_err'] = t('error_new_password_short');
   } elseif ($new !== $new2) {
-    $_SESSION['toast_err'] = "Le due password nuove non coincidono.";
+    $_SESSION['toast_err'] = t('error_new_password_mismatch');
   } else {
     $new_hash = password_hash($new, PASSWORD_DEFAULT);
     $up = $pdo->prepare("UPDATE users SET pass_hash=? WHERE id=?");
     $up->execute([$new_hash, (int)$user['id']]);
-    $_SESSION['toast_msg'] = "Password aggiornata ✅";
+    $_SESSION['toast_msg'] = t('msg_password_updated');
   }
 
   header("Location: app.php");
@@ -196,11 +196,29 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && (string)($_POST['azione'] ?? '') ==
 }
 
 /* =========================
+   VIEW USER ID (solo admin dal pannello utenti)
+========================= */
+$view_user_id = null;
+$view_user_info = null;
+if (is_admin($user) && isset($_GET['view_user_id'])) {
+  $vid = (int)$_GET['view_user_id'];
+  if ($vid > 0) {
+    $pdo = db();
+    $st = $pdo->prepare("SELECT id, username FROM users WHERE id=? AND is_active=1 LIMIT 1");
+    $st->execute([$vid]);
+    $view_user_info = $st->fetch();
+    if ($view_user_info) {
+      $view_user_id = $vid;
+    }
+  }
+}
+
+/* =========================
    CRUD CONTATTI
 ========================= */
 if ($_SERVER["REQUEST_METHOD"] === "POST" && (string)($_POST['azione'] ?? '') === 'salva') {
   if (!hash_equals($_SESSION['csrf'] ?? '', (string)($_POST['csrf'] ?? ''))) {
-    $_SESSION['toast_err'] = "Richiesta non valida (CSRF).";
+    $_SESSION['toast_err'] = t('error_csrf_req');
     header("Location: app.php");
     exit();
   }
@@ -213,9 +231,9 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && (string)($_POST['azione'] ?? '') ==
 
   $id = !empty($_POST['id']) ? (string)$_POST['id'] : uniqid("c_", true);
 
-  // se aggiorno un contatto esistente, verifica ownership (non-admin)
+  // verifica ownership del contatto
   if (!empty($_POST['id'])) {
-    require_contact_access($user, (string)$_POST['id']);
+    require_contact_access($user, (string)$_POST['id'], $view_user_id);
   }
 
   $old_avatar = safe_path_inside_uploads($_POST['old_avatar'] ?? "", $upload_url);
@@ -241,10 +259,10 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && (string)($_POST['azione'] ?? '') ==
 
   $preferito = (isset($_POST['preferito']) && (string)$_POST['preferito'] === '1');
 
-  // owner: per default user loggato; admin può assegnare ad altro utente
+  // owner: se admin in modalità "visualizza utente X" usa X, altrimenti usa proprio id
   $owner_id = (int)$user['id'];
-  if (is_admin($user) && isset($_POST['user_id'])) {
-    $owner_id = max(1, (int)$_POST['user_id']);
+  if ($view_user_id !== null) {
+    $owner_id = $view_user_id;
   }
 
   $contact_data = [
@@ -259,7 +277,135 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && (string)($_POST['azione'] ?? '') ==
   ];
 
   upsert_contact($contact_data);
-  header("Location: app.php");
+  $redirect = $view_user_id ? "app.php?view_user_id=" . $view_user_id : "app.php";
+  header("Location: " . $redirect);
+  exit();
+}
+
+/* =========================
+   IMPORT DA SIM (VCF / CSV)
+========================= */
+if ($_SERVER["REQUEST_METHOD"] === "POST" && (string)($_POST['azione'] ?? '') === 'import_sim') {
+  if (!hash_equals($_SESSION['csrf'] ?? '', (string)($_POST['csrf'] ?? ''))) {
+    $_SESSION['toast_err'] = t('error_csrf_req');
+    header("Location: app.php" . ($view_user_id ? "?view_user_id=" . $view_user_id : ""));
+    exit();
+  }
+  if (!can_manage_contacts($user)) {
+    $_SESSION['toast_err'] = t('error_csrf_req');
+    header("Location: app.php" . ($view_user_id ? "?view_user_id=" . $view_user_id : ""));
+    exit();
+  }
+
+  $owner_id = (int)$user['id'];
+  if ($view_user_id !== null) $owner_id = $view_user_id;
+
+  $imported = 0;
+  $err_msg = null;
+
+  if (!empty($_FILES['sim_file']['tmp_name']) && is_uploaded_file($_FILES['sim_file']['tmp_name'])) {
+    $tmp = $_FILES['sim_file']['tmp_name'];
+    $name = strtolower((string)($_FILES['sim_file']['name'] ?? ''));
+    $content = @file_get_contents($tmp);
+    if ($content === false) $content = '';
+
+    $contacts_to_import = [];
+    if (substr($name, -4) === '.vcf' || strpos($content, 'BEGIN:VCARD') !== false) {
+      // Parse VCF (vCard)
+      $blocks = preg_split('/\nBEGIN:VCARD\n/i', "\n" . $content);
+      foreach ($blocks as $card) {
+        $card = trim($card);
+        if ($card === '') continue;
+        if (!preg_match('/^BEGIN:VCARD/i', $card)) $card = "BEGIN:VCARD\r\n" . $card;
+        $card = preg_replace('/\r\n\s/', '', $card);
+        $n = $fn = $tel = $email = '';
+        if (preg_match('/N:([^\r\n]*)/i', $card, $m)) $n = trim($m[1]);
+        if (preg_match('/FN:([^\r\n]*)/i', $card, $m)) $fn = trim($m[1]);
+        if (preg_match('/TEL[^:]*:([^\r\n]*)/i', $card, $m)) $tel = preg_replace('/[^\d+]/', '', $m[1]);
+        if (preg_match('/EMAIL[^:]*:([^\r\n]*)/i', $card, $m)) $email = trim($m[1]);
+        if ($tel !== '' || $fn !== '' || $n !== '') {
+          $nome = $cognome = '';
+          if ($n) {
+            $parts = array_map('trim', explode(';', $n));
+            $cognome = $parts[0] ?? '';
+            $nome = $parts[1] ?? '';
+            if ($nome === '' && $cognome !== '') { $nome = $cognome; $cognome = ''; }
+          }
+          if ($nome === '') $nome = $fn;
+          $nome = $nome ?: t('no_name');
+          $contacts_to_import[] = [
+            'nome' => $nome,
+            'cognome' => $cognome,
+            'telefono' => $tel ?: ' ',
+            'email' => $email,
+          ];
+        }
+      }
+    } elseif (substr($name, -4) === '.csv' || strpos($content, ',') !== false || strpos($content, ';') !== false) {
+      // Parse CSV (supporta virgola e punto e virgola)
+      $lines = preg_split('/\r?\n/', $content);
+      if (count($lines) < 2) $lines = [];
+      $delim = (substr_count($lines[0] ?? '', ';') >= substr_count($lines[0] ?? '', ',')) ? ';' : ',';
+      $header = array_map('trim', str_getcsv($lines[0] ?? '', $delim, '"'));
+      $header_lower = array_map('strtolower', $header);
+      $idx_name = $idx_nome = $idx_cognome = $idx_tel = $idx_phone = $idx_email = -1;
+      foreach ($header_lower as $i => $h) {
+        if (in_array($h, ['name', 'nome', 'display name', 'display name 1'], true)) $idx_name = $i;
+        elseif (in_array($h, ['first name', 'first', 'given'], true)) $idx_nome = $i;
+        elseif (in_array($h, ['last name', 'last', 'family', 'cognome'], true)) $idx_cognome = $i;
+        elseif (in_array($h, ['tel', 'telefono', 'phone', 'mobile', 'cell'], true)) { $idx_tel = $i; if ($idx_phone < 0) $idx_phone = $i; }
+        elseif (in_array($h, ['email', 'e-mail', 'mail'], true)) $idx_email = $i;
+      }
+      if ($idx_tel < 0) { foreach ($header_lower as $i => $h) { if (strpos($h, 'tel') !== false || strpos($h, 'phone') !== false) { $idx_tel = $i; break; } } }
+      if ($idx_email < 0) { foreach ($header_lower as $i => $h) { if (strpos($h, 'email') !== false || strpos($h, 'mail') !== false) { $idx_email = $i; break; } } }
+      for ($i = 1; $i < count($lines); $i++) {
+        $row = str_getcsv($lines[$i], $delim, '"');
+        $nome = trim($row[$idx_name] ?? $row[$idx_nome] ?? '');
+        $cognome = trim($row[$idx_cognome] ?? '');
+        $tel = preg_replace('/[^\d+]/', '', $row[$idx_tel] ?? $row[$idx_phone] ?? '');
+        $email = trim($row[$idx_email] ?? '');
+        if ($nome === '' && $cognome === '') $nome = trim($row[0] ?? '');
+        if ($tel === '' && isset($row[1])) $tel = preg_replace('/[^\d+]/', '', $row[1]);
+        if ($email === '' && isset($row[2])) $email = trim($row[2]);
+        if ($tel !== '' || $nome !== '' || $email !== '') {
+          $contacts_to_import[] = [
+            'nome' => $nome ?: t('no_name'),
+            'cognome' => $cognome,
+            'telefono' => $tel ?: ' ',
+            'email' => $email,
+          ];
+        }
+      }
+    } else {
+      $err_msg = t('import_sim_invalid_format');
+    }
+
+    foreach ($contacts_to_import as $c) {
+      $id = 'c_' . uniqid('', true);
+      $contact_data = [
+        'id' => $id,
+        'user_id' => $owner_id,
+        'nome' => $c['nome'],
+        'cognome' => $c['cognome'],
+        'telefono' => $c['telefono'],
+        'email' => $c['email'],
+        'avatar' => '',
+        'preferito' => false,
+      ];
+      upsert_contact($contact_data);
+      $imported++;
+    }
+  } else {
+    $err_msg = t('import_sim_no_file');
+  }
+
+  $redirect = $view_user_id ? "app.php?view_user_id=" . $view_user_id : "app.php";
+  if ($err_msg) {
+    $_SESSION['toast_err'] = $err_msg;
+  } elseif ($imported > 0) {
+    $_SESSION['toast_msg'] = str_replace('{n}', (string)$imported, t('import_sim_success'));
+  }
+  header("Location: " . $redirect);
   exit();
 }
 
@@ -273,7 +419,7 @@ if (isset($_GET['action'], $_GET['id'])) {
     exit;
   }
 
-  require_contact_access($user, $id);
+  require_contact_access($user, $id, $view_user_id);
 
   if ($action === 'delete') {
     $avatar = delete_contact($id);
@@ -283,28 +429,26 @@ if (isset($_GET['action'], $_GET['id'])) {
     toggle_fav($id);
   }
 
-  header("Location: app.php");
+  $redirect = $view_user_id ? "app.php?view_user_id=" . $view_user_id : "app.php";
+  header("Location: " . $redirect);
   exit();
 }
 
 /* =========================
    DATA FOR UI
 ========================= */
-$contacts = fetch_contacts($user);
+$contacts = fetch_contacts($user, $view_user_id);
 $contacts_json = json_encode($contacts, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 
 $users = is_admin($user) ? fetch_users() : [];
 $users_json = json_encode($users, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-
-$users_select = is_admin($user) ? fetch_users_for_select() : [];
-$users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
 ?>
 <!doctype html>
-<html lang="it">
+<html lang="<?= htmlspecialchars($CURRENT_LANG) ?>">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Contatti</title>
+  <title><?= t('page_contacts') ?></title>
   <style>
     :root{
       --bg0:#070b16;
@@ -414,7 +558,58 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
       white-space:nowrap;
     }
     .logout:hover{ color: var(--text); background: rgba(255,255,255,.08) }
-
+    .profileDropdown{ position:relative; }
+    .profileBtn{
+      width: 42px; height: 42px;
+      border-radius: 50%;
+      border: 1px solid rgba(255,255,255,.2);
+      background: linear-gradient(135deg, rgba(125,211,252,.5), rgba(167,139,250,.5));
+      color: var(--text);
+      font-size: 20px;
+      cursor: pointer;
+      display: grid; place-items: center;
+      transition: .18s ease;
+      backdrop-filter: blur(12px);
+      box-shadow: 0 12px 30px rgba(0,0,0,.22);
+    }
+    .profileBtn:hover{ transform: scale(1.05); background: linear-gradient(135deg, rgba(125,211,252,.7), rgba(167,139,250,.7)); }
+    .profileMenu{
+      position: absolute;
+      top: calc(100% + 8px);
+      right: 0;
+      min-width: 200px;
+      border-radius: 18px;
+      border: 1px solid rgba(255,255,255,.18);
+      background: rgba(12,20,40,.95);
+      backdrop-filter: blur(20px);
+      box-shadow: 0 24px 60px rgba(0,0,0,.5);
+      padding: 8px;
+      display: none;
+      z-index: 100;
+    }
+    .profileMenu.open{ display: block; animation: dropdownPop .2s ease; }
+    @keyframes dropdownPop{ from{ opacity:0; transform: translateY(-8px); } to{ opacity:1; transform: translateY(0); } }
+    .profileMenu a, .profileMenu button{
+      display: flex; align-items: center; gap: 12px;
+      width: 100%;
+      padding: 12px 14px;
+      border: none;
+      border-radius: 14px;
+      background: transparent;
+      color: var(--text);
+      font-size: 14px;
+      text-align: left;
+      cursor: pointer;
+      text-decoration: none;
+      transition: .15s ease;
+    }
+    .profileMenu a:hover, .profileMenu button:hover{
+      background: rgba(255,255,255,.1);
+    }
+    .profileMenu .ico{ font-size: 18px; opacity: .9; }
+    .langItem{display:flex;align-items:center;padding:12px 14px;border-radius:14px;text-decoration:none;color:rgba(255,255,255,.9);font-weight:600;transition:.15s ease;margin-bottom:6px;}
+    .langItem:hover{background:rgba(255,255,255,.1)}
+    .langItem.active{background:rgba(125,211,252,.2);border:1px solid rgba(125,211,252,.4);}
     .toolbar{
       width:min(980px, 100%);
       margin: 14px auto 0;
@@ -663,6 +858,32 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
       color:var(--muted);
       font-size:12px;
     }
+    .fab{
+      position: fixed;
+      bottom: max(24px, env(safe-area-inset-bottom));
+      right: max(20px, env(safe-area-inset-right));
+      width: min(72px, 18vw);
+      height: min(72px, 18vw);
+      min-width: 60px;
+      min-height: 60px;
+      border-radius: 50%;
+      border: none;
+      background: linear-gradient(135deg, rgba(125,211,252,.95), rgba(167,139,250,.90));
+      color: rgba(0,0,0,.88);
+      font-size: 32px;
+      cursor: pointer;
+      display: grid;
+      place-items: center;
+      box-shadow: 0 12px 40px rgba(0,0,0,.4), 0 0 0 1px rgba(255,255,255,.15);
+      transition: .2s ease;
+      z-index: 90;
+    }
+    .fab:hover{
+      transform: scale(1.08);
+      box-shadow: 0 16px 50px rgba(0,0,0,.45);
+    }
+    .fab:active{ transform: scale(0.98); }
+    .fab.hidden{ opacity: 0; pointer-events: none; transform: scale(0.8); }
   </style>
 </head>
 <body>
@@ -672,40 +893,59 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
       <div class="title">
         <div class="appdot"></div>
         <div style="min-width:0">
-          <h1>Contatti</h1>
+          <h1><?= t('page_contacts') ?></h1>
           <div class="subtitle">
-            <?= h($user['username']) ?><?php if (is_admin($user)): ?> (<?= h($user['role']) ?>)<?php endif; ?> · <?= count($contacts) ?> contatti
-            <?php if (!is_admin($user)): ?> · solo i tuoi contatti<?php endif; ?>
+            <?php if ($view_user_id && $view_user_info): ?>
+              <?= t('viewing_contacts_of') ?> <strong><?= h($view_user_info['username']) ?></strong>
+              <a href="app.php" style="margin-left:8px;color:rgba(125,211,252,.9);"><?= t('back_to_my_contacts') ?></a>
+            <?php else: ?>
+              <?= h($user['username']) ?><?php if (is_admin($user)): ?> (<?= h($user['role']) ?>)<?php endif; ?> · <?= count($contacts) ?> <?= t('contacts_subtitle') ?>
+              · <?= t('contacts_yours_only') ?>
+            <?php endif; ?>
           </div>
         </div>
       </div>
 
       <div class="actions">
-        <button class="iconbtn" onclick="openEdit(null)" aria-label="Nuovo contatto" title="Nuovo">➕</button>
-        <button class="iconbtn" onclick="openPass()" aria-label="Cambia password" title="Cambia password">🔒</button>
-
-        <?php if (is_admin($user)): ?>
-          <button class="iconbtn" onclick="openUsersAdmin()" aria-label="Gestione utenti" title="Gestione utenti">👥</button>
-        <?php endif; ?>
-
-        <a class="logout" href="app.php?logout=1">Esci</a>
+        <div class="profileDropdown">
+          <button type="button" class="profileBtn" onclick="toggleProfileMenu()" aria-label="Menu profilo" aria-expanded="false" aria-haspopup="true" id="profileBtn">👤</button>
+          <div class="profileMenu" id="profileMenu" role="menu">
+            <button type="button" role="menuitem" onclick="closeProfileMenu(); openLanguage();">
+              <span class="ico">🌐</span><?= t('label_language') ?>
+            </button>
+            <button type="button" role="menuitem" onclick="closeProfileMenu(); openImportSIM();">
+              <span class="ico">📲</span><?= t('btn_import_from_sim') ?>
+            </button>
+            <button type="button" role="menuitem" onclick="closeProfileMenu(); openExport();">
+              <span class="ico">📤</span><?= t('btn_export') ?>
+            </button>
+            <button type="button" role="menuitem" onclick="closeProfileMenu(); openPass();">
+              <span class="ico">🔒</span><?= t('btn_change_password') ?>
+            </button>
+            <?php if (is_admin($user)): ?>
+              <button type="button" role="menuitem" onclick="closeProfileMenu(); openUsersAdmin();">
+                <span class="ico">👥</span><?= t('btn_users_admin') ?>
+              </button>
+            <?php endif; ?>
+            <a href="app.php?logout=1" role="menuitem">
+              <span class="ico">🚪</span><?= t('btn_logout') ?>
+            </a>
+          </div>
+        </div>
       </div>
     </div>
 
     <div class="toolbar">
       <div class="search">
         <span>🔎</span>
-        <input id="q" type="search" placeholder="Cerca nome, telefono, email…" autocomplete="off" />
+        <input id="q" type="search" placeholder="<?= t('search_placeholder') ?>" autocomplete="off" />
       </div>
 
       <div style="display:flex;align-items:center;gap:10px;flex:0 0 auto;">
         <div class="tabs" role="tablist" aria-label="Filtro contatti">
-          <button class="tab active" id="tabAll" onclick="setTab('all')" type="button">Tutti</button>
-          <button class="tab" id="tabFav" onclick="setTab('fav')" type="button">Preferiti</button>
+          <button class="tab active" id="tabAll" onclick="setTab('all')" type="button" data-t="tab_all"><?= t('tab_all') ?></button>
+          <button class="tab" id="tabFav" onclick="setTab('fav')" type="button" data-t="tab_favorites"><?= t('tab_favorites') ?></button>
         </div>
-        <?php if (is_admin($user)): ?>
-          <div id="userFilterChip" class="userFilterChip" style="display:none;"></div>
-        <?php endif; ?>
       </div>
     </div>
   </div>
@@ -720,7 +960,7 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
   <div class="content">
     <div id="list" class="list"></div>
     <div id="empty" class="empty" style="display:none;">
-      Nessun contatto trovato. Prova a cambiare filtro o cerca qualcos’altro ✨
+      <?= t('empty_contacts') ?>
     </div>
   </div>
 
@@ -728,12 +968,12 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
   <div id="viewOverlay" class="overlay" aria-hidden="true">
     <div class="overlayTop">
       <div class="overlayTopInner">
-        <button class="iconbtn" onclick="closeView()" aria-label="Indietro">←</button>
+        <button class="iconbtn" onclick="closeView()" aria-label="<?= t('btn_back') ?>">←</button>
         <div class="overlayBtns">
-          <button class="iconbtn" id="btnEdit" aria-label="Modifica" title="Modifica">✎</button>
-          <button class="iconbtn" id="btnStar" aria-label="Preferito" title="Preferito">☆</button>
-          <button class="iconbtn" id="btnDelete" aria-label="Elimina" title="Elimina">🗑️</button>
-          <button class="iconbtn" onclick="closeView()" aria-label="Chiudi" title="Chiudi">✕</button>
+          <button class="iconbtn" id="btnEdit" aria-label="<?= t('btn_edit') ?>" title="<?= t('btn_edit') ?>">✎</button>
+          <button class="iconbtn" id="btnStar" aria-label="<?= t('btn_favorite') ?>" title="<?= t('btn_favorite') ?>">☆</button>
+          <button class="iconbtn" id="btnDelete" aria-label="<?= t('btn_delete') ?>" title="<?= t('btn_delete') ?>">🗑️</button>
+          <button class="iconbtn" onclick="closeView()" aria-label="<?= t('btn_close') ?>" title="<?= t('btn_close') ?>">✕</button>
         </div>
       </div>
     </div>
@@ -745,12 +985,12 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
       </div>
 
       <div class="card">
-        <div class="cardHeader">Dettagli contatto</div>
+        <div class="cardHeader"><?= t('details_contact') ?></div>
 
         <div class="row">
           <div class="ico">📞</div>
           <div class="rowMain">
-            <div class="rowLabel">Telefono</div>
+            <div class="rowLabel"><?= t('label_phone') ?></div>
             <div id="v_tel" class="rowValue"></div>
           </div>
         </div>
@@ -758,14 +998,14 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
         <div class="row">
           <div class="ico">📧</div>
           <div class="rowMain">
-            <div class="rowLabel">Email</div>
+            <div class="rowLabel"><?= t('label_email') ?></div>
             <div id="v_email" class="rowValue"></div>
           </div>
         </div>
 
         <div class="quick">
-          <a id="callBtn" class="pill" href="#" onclick="return false;">📞 Chiama</a>
-          <a id="mailBtn" class="pill" href="#" onclick="return false;">✉️ Email</a>
+          <a id="callBtn" class="pill" href="#" onclick="return false;">📞 <?= t('btn_call') ?></a>
+          <a id="mailBtn" class="pill" href="#" onclick="return false;">✉️ <?= t('btn_email') ?></a>
         </div>
       </div>
     </div>
@@ -777,15 +1017,15 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
       <div class="handle"></div>
       <div class="sheetTop">
         <div>
-          <p id="etitle" class="sheetTitle">Crea contatto</p>
+          <p id="etitle" class="sheetTitle"><?= t('sheet_create_contact') ?></p>
           <div style="color:rgba(255,255,255,.55); font-size:12px; margin-top:4px;">
-            Salvataggio su MySQL · <?= is_admin($user) ? "admin (tutti)" : "solo tuoi contatti" ?>
+            <?= t('sheet_save_info') ?><?= ($view_user_id && $view_user_info) ? h($view_user_info['username']) : t('sheet_your_contacts') ?>
           </div>
         </div>
-        <button class="iconbtn" onclick="closeEdit()" aria-label="Chiudi">✕</button>
+        <button class="iconbtn" onclick="closeEdit()" aria-label="<?= t('btn_close') ?>">✕</button>
       </div>
 
-      <form action="app.php" method="POST" enctype="multipart/form-data">
+      <form action="app.php<?= $view_user_id ? '?view_user_id='.$view_user_id : '' ?>" method="POST" enctype="multipart/form-data">
         <div class="sheetBody">
           <input type="hidden" name="azione" value="salva">
           <input type="hidden" name="csrf" value="<?= h($CSRF) ?>">
@@ -793,40 +1033,33 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
           <input type="hidden" name="old_avatar" id="e_old_avatar">
           <input type="hidden" name="preferito" id="e_preferito">
 
-          <?php if (is_admin($user)): ?>
-            <div class="f" style="margin-bottom:10px;">
-              <label for="e_user_id">Assegna a utente</label>
-              <select name="user_id" id="e_user_id"></select>
-            </div>
-          <?php endif; ?>
-
           <div class="grid">
             <div class="f">
-              <label for="e_nome">Nome *</label>
-              <input type="text" name="nome" id="e_nome" placeholder="Nome" required>
+              <label for="e_nome"><?= t('label_name') ?> *</label>
+              <input type="text" name="nome" id="e_nome" placeholder="<?= t('placeholder_name') ?>" required>
             </div>
             <div class="f">
-              <label for="e_cognome">Cognome</label>
-              <input type="text" name="cognome" id="e_cognome" placeholder="Cognome">
+              <label for="e_cognome"><?= t('label_surname') ?></label>
+              <input type="text" name="cognome" id="e_cognome" placeholder="<?= t('placeholder_surname') ?>">
             </div>
             <div class="f">
-              <label for="e_tel">Telefono *</label>
-              <input type="tel" name="telefono" id="e_tel" placeholder="+39 ..." required>
+              <label for="e_tel"><?= t('label_phone') ?> *</label>
+              <input type="tel" name="telefono" id="e_tel" placeholder="<?= t('placeholder_phone') ?>" required>
             </div>
             <div class="f">
-              <label for="e_email">Email</label>
-              <input type="email" name="email" id="e_email" placeholder="nome@dominio.it">
+              <label for="e_email"><?= t('label_email') ?></label>
+              <input type="email" name="email" id="e_email" placeholder="<?= t('placeholder_email') ?>">
             </div>
             <div class="f">
-              <label for="e_avatar">Avatar (immagine)</label>
+              <label for="e_avatar"><?= t('label_avatar') ?></label>
               <input id="e_avatar" type="file" name="avatar" accept="image/*">
             </div>
           </div>
         </div>
 
         <div class="sheetActions">
-          <button type="button" class="btn btnGhost" onclick="closeEdit()">Annulla</button>
-          <button type="submit" class="btn btnPrimary">Salva</button>
+          <button type="button" class="btn btnGhost" onclick="closeEdit()"><?= t('btn_cancel') ?></button>
+          <button type="submit" class="btn btnPrimary"><?= t('btn_save') ?></button>
         </div>
       </form>
     </div>
@@ -838,9 +1071,9 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
       <div class="handle"></div>
       <div class="sheetTop">
         <div>
-          <p class="sheetTitle">Cambia password</p>
+          <p class="sheetTitle"><?= t('sheet_change_password') ?></p>
           <div style="color:rgba(255,255,255,.55); font-size:12px; margin-top:4px;">
-            Utente: <b><?= h($user['username']) ?></b>
+            <?= t('label_user') ?>: <b><?= h($user['username']) ?></b>
           </div>
         </div>
         <button class="iconbtn" onclick="closePass()" aria-label="Chiudi">✕</button>
@@ -853,27 +1086,113 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
 
           <div class="grid">
             <div class="f">
-              <label for="old_pass">Password attuale *</label>
+              <label for="old_pass"><?= t('label_current_password') ?></label>
               <input id="old_pass" type="password" name="old_pass" required>
             </div>
 
             <div class="f">
-              <label for="new_pass">Nuova password *</label>
+              <label for="new_pass"><?= t('label_new_password') ?></label>
               <input id="new_pass" type="password" name="new_pass" required>
             </div>
 
             <div class="f">
-              <label for="new_pass2">Ripeti nuova password *</label>
+              <label for="new_pass2"><?= t('label_repeat_new_password') ?></label>
               <input id="new_pass2" type="password" name="new_pass2" required>
             </div>
           </div>
         </div>
 
         <div class="sheetActions">
-          <button type="button" class="btn btnGhost" onclick="closePass()">Annulla</button>
-          <button type="submit" class="btn btnPrimary">Aggiorna</button>
+          <button type="button" class="btn btnGhost" onclick="closePass()"><?= t('btn_cancel') ?></button>
+          <button type="submit" class="btn btnPrimary"><?= t('btn_update') ?></button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <!-- LINGUA SHEET -->
+  <div id="langSheetWrap" class="sheetWrap" onclick="langSheetBackdropClose(event)">
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="<?= t('sheet_language') ?>">
+      <div class="handle"></div>
+      <div class="sheetTop">
+        <p class="sheetTitle"><?= t('sheet_language') ?></p>
+        <button class="iconbtn" onclick="closeLanguage()" aria-label="<?= t('btn_close') ?>">✕</button>
+      </div>
+      <div class="sheetBody">
+        <?php foreach ($AVAILABLE_LANGS as $code => $label): ?>
+          <a href="app.php?lang=<?= $code ?><?= $view_user_id ? '&view_user_id='.$view_user_id : '' ?>" class="langItem <?= $code === $CURRENT_LANG ? 'active' : '' ?>" hreflang="<?= $code ?>"><?= h($label) ?></a>
+        <?php endforeach; ?>
+      </div>
+    </div>
+  </div>
+
+  <!-- IMPORT DA SIM SHEET -->
+  <div id="importSIMSheetWrap" class="sheetWrap" onclick="importSIMBackdropClose(event)">
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="<?= t('sheet_import_sim') ?>">
+      <div class="handle"></div>
+      <div class="sheetTop">
+        <div>
+          <p class="sheetTitle"><?= t('sheet_import_sim') ?></p>
+          <div style="color:rgba(255,255,255,.55); font-size:12px; margin-top:4px;">
+            <?= t('import_sim_formats') ?>
+            <ul style="margin:6px 0 0 14px; padding:0;">
+              <li><strong>.VCF</strong> (vCard) — <?= t('format_vcf_desc') ?></li>
+              <li><strong>.CSV</strong> — <?= t('format_csv_desc') ?></li>
+            </ul>
+          </div>
+        </div>
+        <button class="iconbtn" onclick="closeImportSIM()" aria-label="<?= t('btn_close') ?>">✕</button>
+      </div>
+
+      <form action="app.php<?= $view_user_id ? '?view_user_id='.$view_user_id : '' ?>" method="POST" enctype="multipart/form-data">
+        <div class="sheetBody">
+          <input type="hidden" name="azione" value="import_sim">
+          <input type="hidden" name="csrf" value="<?= h($CSRF) ?>">
+
+          <div class="f">
+            <label for="import_sim_file"><?= t('import_sim_select_file') ?></label>
+            <input id="import_sim_file" type="file" name="sim_file" accept=".vcf,.csv,text/vcard,text/csv,text/x-vcard,application/vnd.ms-excel" required>
+          </div>
+        </div>
+
+        <div class="sheetActions">
+          <button type="button" class="btn btnGhost" onclick="closeImportSIM()"><?= t('btn_cancel') ?></button>
+          <button type="submit" class="btn btnPrimary"><?= t('btn_import') ?></button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- EXPORT SHEET -->
+  <div id="exportSheetWrap" class="sheetWrap" onclick="exportBackdropClose(event)">
+    <div class="sheet" role="dialog" aria-modal="true" aria-label="<?= t('sheet_export') ?>">
+      <div class="handle"></div>
+      <div class="sheetTop">
+        <div>
+          <p class="sheetTitle"><?= t('sheet_export') ?></p>
+          <div style="color:rgba(255,255,255,.55); font-size:12px; margin-top:4px;">
+            <?= t('export_formats_desc') ?>
+            <ul style="margin:6px 0 0 14px; padding:0;">
+              <li><strong>.VCF</strong> (vCard) — <?= t('format_vcf_desc') ?></li>
+              <li><strong>.CSV</strong> — <?= t('format_csv_desc') ?></li>
+            </ul>
+          </div>
+        </div>
+        <button class="iconbtn" onclick="closeExport()" aria-label="<?= t('btn_close') ?>">✕</button>
+      </div>
+      <div class="sheetBody">
+        <div class="grid" style="gap:12px;">
+          <button type="button" class="btn btnPrimary" style="width:100%;display:flex;align-items:center;justify-content:center;gap:10px;" onclick="downloadExport('vcf')">
+            <span>📇</span><?= t('btn_export_vcf') ?>
+          </button>
+          <button type="button" class="btn btnPrimary" style="width:100%;display:flex;align-items:center;justify-content:center;gap:10px;" onclick="downloadExport('csv')">
+            <span>📊</span><?= t('btn_export_csv') ?>
+          </button>
+        </div>
+      </div>
+      <div class="sheetActions">
+        <button type="button" class="btn btnGhost" onclick="closeExport()"><?= t('btn_cancel') ?></button>
+      </div>
     </div>
   </div>
 
@@ -884,9 +1203,9 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
       <div class="handle"></div>
       <div class="sheetTop">
         <div>
-          <p class="sheetTitle">Gestione utenti</p>
+          <p class="sheetTitle"><?= t('sheet_users_admin') ?></p>
           <div style="color:rgba(255,255,255,.55); font-size:12px; margin-top:4px;">
-            admin / user · attiva/disattiva · cambia password · elimina
+            <?= t('sheet_users_admin_sub') ?>
           </div>
         </div>
         <button class="iconbtn" onclick="closeUsersAdmin()" aria-label="Chiudi">✕</button>
@@ -896,22 +1215,22 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
         <div class="usersToolbar">
           <div class="usersSearch">
             <span>🔎</span>
-            <input id="usersSearch" type="search" placeholder="Cerca per username o ID…" autocomplete="off" />
+            <input id="usersSearch" type="search" placeholder="<?= t('search_users_placeholder') ?>" autocomplete="off" />
           </div>
           <select id="usersFilterRole" class="usersFilter">
-            <option value="all">Tutti i ruoli</option>
-            <option value="admin">Solo admin</option>
-            <option value="user">Solo user</option>
+            <option value="all"><?= t('filter_all_roles') ?></option>
+            <option value="admin"><?= t('filter_admin_only') ?></option>
+            <option value="user"><?= t('filter_user_only') ?></option>
           </select>
           <select id="usersFilterActive" class="usersFilter">
-            <option value="all">Attivi + disattivi</option>
-            <option value="active">Solo attivi</option>
-            <option value="inactive">Solo disattivi</option>
+            <option value="all"><?= t('filter_active_inactive') ?></option>
+            <option value="active"><?= t('filter_active_only') ?></option>
+            <option value="inactive"><?= t('filter_inactive_only') ?></option>
           </select>
         </div>
 
         <div class="card">
-          <div class="cardHeader">Tutti gli utenti</div>
+          <div class="cardHeader"><?= t('card_all_users') ?></div>
           <div id="usersList" style="padding:10px 10px 14px;"></div>
         </div>
       </div>
@@ -956,18 +1275,51 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
   </div>
   <?php endif; ?>
 
+  <button type="button" class="fab" id="fabAdd" onclick="openEdit(null)" aria-label="<?= t('btn_new_contact') ?>" title="<?= t('btn_new_contact') ?>">➕</button>
+
 <script>
   const ALL_CONTACTS = <?= $contacts_json ?: "[]" ?>;
   const IS_ADMIN = <?= is_admin($user) ? 'true' : 'false' ?>;
+  const VIEW_USER_ID = <?= $view_user_id ? (int)$view_user_id : 'null' ?>;
+  const T = <?= json_encode([
+    'no_name' => t('no_name'),
+    'export_empty' => t('export_empty'),
+    'section_favorites' => t('section_favorites'),
+    'section_contacts' => t('section_contacts'),
+    'sheet_create_contact' => t('sheet_create_contact'),
+    'sheet_edit_contact' => t('sheet_edit_contact'),
+    'confirm_delete_contact' => t('confirm_delete_contact'),
+    'confirm_delete_user' => t('confirm_delete_user'),
+    'empty_users' => t('empty_users'),
+    'status_active' => t('status_active'),
+    'status_inactive' => t('status_inactive'),
+  ], JSON_UNESCAPED_UNICODE) ?>;
 
   let currentTab = "all";
   let currentQuery = "";
   let viewing = null;
-  let currentUserFilterId = null;
-  let currentUserFilterName = "";
 
   const $ = (id) => document.getElementById(id);
   function normalize(s){ return (s||"").toString().toLowerCase().trim(); }
+
+  function toggleProfileMenu(){
+    const m = $("profileMenu");
+    const b = $("profileBtn");
+    if (!m || !b) return;
+    m.classList.toggle("open");
+    b.setAttribute("aria-expanded", m.classList.contains("open"));
+  }
+  function closeProfileMenu(){
+    const m = $("profileMenu");
+    const b = $("profileBtn");
+    if (m) m.classList.remove("open");
+    if (b) b.setAttribute("aria-expanded", "false");
+  }
+  document.addEventListener("click", (e) => {
+    if ($("profileMenu")?.classList.contains("open") && !e.target.closest(".profileDropdown")) {
+      closeProfileMenu();
+    }
+  });
 
   function contactMatches(c, q){
     if (!q) return true;
@@ -975,9 +1327,10 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
     return hay.includes(q);
   }
 
+  function baseUrl(){ return VIEW_USER_ID ? "app.php?view_user_id=" + VIEW_USER_ID : "app.php"; }
+
   function filteredContacts(){
     return ALL_CONTACTS.filter(c => {
-      if (currentUserFilterId !== null && parseInt(c.user_id) !== currentUserFilterId) return false;
       if (currentTab === "fav" && !c.preferito) return false;
       return contactMatches(c, currentQuery);
     });
@@ -1001,10 +1354,10 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
 
     const sections = [];
     if (currentTab === "all") {
-      if (grouped.fav.length) sections.push({ label: "Preferiti", items: grouped.fav });
-      if (grouped.oth.length) sections.push({ label: "Contatti", items: grouped.oth });
+      if (grouped.fav.length) sections.push({ label: T.section_favorites, items: grouped.fav });
+      if (grouped.oth.length) sections.push({ label: T.section_contacts, items: grouped.oth });
     } else {
-      sections.push({ label: "Preferiti", items: grouped.fav });
+      sections.push({ label: T.section_favorites, items: grouped.fav });
     }
 
     for (const s of sections) {
@@ -1036,7 +1389,7 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
 
         const nm = document.createElement("div");
         nm.className = "name";
-        nm.textContent = `${c.nome || ""} ${c.cognome || ""}`.trim() || "Senza nome";
+        nm.textContent = `${c.nome || ""} ${c.cognome || ""}`.trim() || T.no_name;
 
         if (c.preferito) {
           const star = document.createElement("span");
@@ -1094,25 +1447,6 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
     render();
   }
 
-  function updateUserFilterChip(){
-    const chip = $("userFilterChip");
-    if (!chip) return;
-    if (currentUserFilterId === null){
-      chip.style.display = "none";
-      chip.textContent = "";
-      return;
-    }
-    chip.style.display = "inline-flex";
-    chip.innerHTML = `👤 Utente: <strong style="margin-left:4px;">${currentUserFilterName}</strong> <button type="button" onclick="clearUserFilter()" style="margin-left:8px;border:none;background:transparent;color:inherit;cursor:pointer;">✕</button>`;
-  }
-
-  function clearUserFilter(){
-    currentUserFilterId = null;
-    currentUserFilterName = "";
-    updateUserFilterChip();
-    render();
-  }
-
   $("q").addEventListener("input", (e) => {
     currentQuery = normalize(e.target.value);
     render();
@@ -1121,7 +1455,7 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
   function openView(c){
     viewing = c;
 
-    $("v_nome").textContent = `${c.nome || ""} ${c.cognome || ""}`.trim() || "Senza nome";
+    $("v_nome").textContent = `${c.nome || ""} ${c.cognome || ""}`.trim() || T.no_name;
     $("v_tel").textContent = c.telefono || "—";
     $("v_email").textContent = c.email || "—";
 
@@ -1131,10 +1465,10 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
 
     $("btnEdit").onclick = () => openEdit(c);
     $("btnStar").textContent = c.preferito ? "★" : "☆";
-    $("btnStar").onclick = () => window.location.href = `app.php?action=toggle_fav&id=${encodeURIComponent(c.id)}`;
+    $("btnStar").onclick = () => window.location.href = baseUrl() + (VIEW_USER_ID ? "&" : "?") + "action=toggle_fav&id=" + encodeURIComponent(c.id);
     $("btnDelete").onclick = () => {
-      if (confirm("Eliminare questo contatto?")) {
-        window.location.href = `app.php?action=delete&id=${encodeURIComponent(c.id)}`;
+      if (confirm(T.confirm_delete_contact)) {
+        window.location.href = baseUrl() + (VIEW_USER_ID ? "&" : "?") + "action=delete&id=" + encodeURIComponent(c.id);
       }
     };
 
@@ -1154,34 +1488,22 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
     $("viewOverlay").style.display = "flex";
     $("viewOverlay").setAttribute("aria-hidden", "false");
     document.body.style.overflow = "hidden";
+    $("fabAdd")?.classList.add("hidden");
   }
   function closeView(){
     $("viewOverlay").style.display = "none";
     $("viewOverlay").setAttribute("aria-hidden", "true");
     document.body.style.overflow = "";
+    $("fabAdd")?.classList.remove("hidden");
   }
 
   // ====== EDIT SHEET ======
-  const USERS_SELECT = <?= $users_select_json ?: "[]" ?>;
-
-  function fillUserSelect(selectedId){
-    const sel = $("e_user_id");
-    if (!sel) return;
-    sel.innerHTML = "";
-    for (const u of USERS_SELECT) {
-      const opt = document.createElement("option");
-      opt.value = u.id;
-      opt.textContent = `${u.username} (${u.role})`;
-      sel.appendChild(opt);
-    }
-    if (selectedId) sel.value = String(selectedId);
-  }
-
   function openEdit(c=null){
     closeView();
+    $("fabAdd")?.classList.add("hidden");
 
     if (c) {
-      $("etitle").textContent = "Modifica contatto";
+      $("etitle").textContent = T.sheet_edit_contact;
       $("e_id").value = c.id || "";
       $("e_nome").value = c.nome || "";
       $("e_cognome").value = c.cognome || "";
@@ -1189,14 +1511,12 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
       $("e_email").value = c.email || "";
       $("e_old_avatar").value = c.avatar || "";
       $("e_preferito").value = c.preferito ? "1" : "0";
-      if (IS_ADMIN) fillUserSelect(c.user_id || "");
     } else {
-      $("etitle").textContent = "Crea contatto";
+      $("etitle").textContent = T.sheet_create_contact;
       document.querySelector("#editSheetWrap form").reset();
       $("e_id").value = "";
       $("e_old_avatar").value = "";
       $("e_preferito").value = "0";
-      if (IS_ADMIN) fillUserSelect("");
     }
 
     $("editSheetWrap").style.display = "flex";
@@ -1207,6 +1527,7 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
   function closeEdit(){
     $("editSheetWrap").style.display = "none";
     document.body.style.overflow = "";
+    $("fabAdd")?.classList.remove("hidden");
   }
 
   function sheetBackdropClose(e){
@@ -1216,6 +1537,7 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
   // ====== PASS SHEET ======
   function openPass(){
     closeView();
+    $("fabAdd")?.classList.add("hidden");
     $("passSheetWrap").style.display = "flex";
     document.body.style.overflow = "hidden";
     setTimeout(() => $("old_pass").focus(), 50);
@@ -1223,9 +1545,105 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
   function closePass(){
     $("passSheetWrap").style.display = "none";
     document.body.style.overflow = "";
+    $("fabAdd")?.classList.remove("hidden");
   }
   function passBackdropClose(e){
     if (e.target && e.target.id === "passSheetWrap") closePass();
+  }
+
+  function openLanguage(){
+    closeView();
+    $("fabAdd")?.classList.add("hidden");
+    $("langSheetWrap").style.display = "flex";
+    document.body.style.overflow = "hidden";
+  }
+  function closeLanguage(){
+    $("langSheetWrap").style.display = "none";
+    document.body.style.overflow = "";
+    $("fabAdd")?.classList.remove("hidden");
+  }
+  function langSheetBackdropClose(e){
+    if (e.target && e.target.id === "langSheetWrap") closeLanguage();
+  }
+
+  function openImportSIM(){
+    closeView();
+    $("fabAdd")?.classList.add("hidden");
+    $("importSIMSheetWrap").style.display = "flex";
+    document.body.style.overflow = "hidden";
+  }
+  function closeImportSIM(){
+    $("importSIMSheetWrap").style.display = "none";
+    document.body.style.overflow = "";
+    $("fabAdd")?.classList.remove("hidden");
+    $("import_sim_file").value = "";
+  }
+  function importSIMBackdropClose(e){
+    if (e.target && e.target.id === "importSIMSheetWrap") closeImportSIM();
+  }
+
+  function openExport(){
+    closeView();
+    $("fabAdd")?.classList.add("hidden");
+    $("exportSheetWrap").style.display = "flex";
+    document.body.style.overflow = "hidden";
+  }
+  function closeExport(){
+    $("exportSheetWrap").style.display = "none";
+    document.body.style.overflow = "";
+    $("fabAdd")?.classList.remove("hidden");
+  }
+  function exportBackdropClose(e){
+    if (e.target && e.target.id === "exportSheetWrap") closeExport();
+  }
+
+  function downloadExport(format){
+    const list = filteredContacts();
+    if (!list.length) {
+      alert(T.export_empty || "Nessun contatto da esportare.");
+      return;
+    }
+    const filename = "contatti_" + new Date().toISOString().slice(0,10) + "." + format;
+    if (format === "vcf") {
+      let vcf = "";
+      for (const c of list) {
+        const fn = `${c.nome || ""} ${c.cognome || ""}`.trim() || T.no_name;
+        const n = `${c.cognome || ""};${c.nome || ""};;;`;
+        vcf += "BEGIN:VCARD\r\nVERSION:3.0\r\n";
+        vcf += "N:" + n + "\r\n";
+        vcf += "FN:" + fn + "\r\n";
+        if (c.telefono) vcf += "TEL;TYPE=CELL:" + c.telefono.replace(/[^\d+]/g, "") + "\r\n";
+        if (c.email) vcf += "EMAIL:" + c.email + "\r\n";
+        vcf += "END:VCARD\r\n";
+      }
+      downloadBlob(vcf, filename, "text/vcard");
+    } else {
+      const BOM = "\uFEFF";
+      let csv = BOM + "Nome;Cognome;Telefono;Email\r\n";
+      for (const c of list) {
+        const nome = escapeCsv(c.nome || "");
+        const cognome = escapeCsv(c.cognome || "");
+        const tel = escapeCsv(c.telefono || "");
+        const email = escapeCsv(c.email || "");
+        csv += nome + ";" + cognome + ";" + tel + ";" + email + "\r\n";
+      }
+      downloadBlob(csv, filename, "text/csv;charset=utf-8");
+    }
+  }
+  function escapeCsv(s){
+    const str = String(s ?? "");
+    if (str.includes(";") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
+      return '"' + str.replace(/"/g, '""') + '"';
+    }
+    return str;
+  }
+  function downloadBlob(content, filename, mime){
+    const blob = new Blob([content], { type: mime });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
   }
 
   // ====== USERS ADMIN ======
@@ -1239,6 +1657,7 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
 
     function openUsersAdmin(){
       closeView();
+      $("fabAdd")?.classList.add("hidden");
       renderUsersAdmin();
       $("usersSheetWrap").style.display = "flex";
       document.body.style.overflow = "hidden";
@@ -1246,6 +1665,7 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
     function closeUsersAdmin(){
       $("usersSheetWrap").style.display = "none";
       document.body.style.overflow = "";
+      $("fabAdd")?.classList.remove("hidden");
     }
     function usersBackdropClose(e){
       if (e.target && e.target.id === "usersSheetWrap") closeUsersAdmin();
@@ -1333,83 +1753,111 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
         empty.style.padding = "10px 12px";
         empty.style.color = "rgba(255,255,255,.75)";
         empty.style.fontSize = "13px";
-        empty.textContent = "Nessun utente trovato con i filtri attuali.";
+        empty.textContent = T.empty_users;
         box.appendChild(empty);
         return;
       }
+
+      const iconBtn = (icon, label, cls, onClick, disabled) => {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.className = cls || "btn btnGhost";
+        b.style.padding = "8px 10px";
+        b.style.fontSize = "16px";
+        b.style.lineHeight = "1";
+        b.innerHTML = icon;
+        b.setAttribute("aria-label", label);
+        b.title = label;
+        b.disabled = disabled;
+        b.onclick = onClick;
+        return b;
+      };
 
       for (const u of list) {
         const row = document.createElement("div");
         row.className = "row";
         row.style.alignItems = "center";
+        row.style.display = "flex";
+        row.style.gap = "12px";
+        row.style.padding = "12px 10px";
+        row.style.borderBottom = "1px solid rgba(255,255,255,.08)";
+        row.style.flexWrap = "wrap";
 
         const left = document.createElement("div");
         left.className = "rowMain";
-
-        const label = document.createElement("div");
-        label.className = "rowLabel";
-        label.textContent = `ID: ${u.id} · ${u.is_active ? "attivo" : "disattivo"}`;
+        left.style.flex = "1 1 180px";
+        left.style.minWidth = "0";
 
         const val = document.createElement("div");
         val.className = "rowValue";
-        const roleShown = (String(u.role).toLowerCase() === 'admin') ? 'Admin' : 'user';
-        val.textContent = `${u.username} (${roleShown})`;
+        val.style.fontSize = "15px";
+        val.style.fontWeight = "600";
+        val.style.marginBottom = "4px";
+        const roleShown = (String(u.role).toLowerCase() === 'admin') ? 'Admin' : 'User';
+        val.textContent = u.username;
 
-        left.appendChild(label);
+        const label = document.createElement("div");
+        label.className = "rowLabel";
+        label.style.fontSize = "12px";
+        label.style.color = "rgba(255,255,255,.55)";
+        label.textContent = `ID: ${u.id} · ${roleShown} · ${u.is_active ? T.status_active : T.status_inactive}`;
+
         left.appendChild(val);
+        left.appendChild(label);
 
         const acts = document.createElement("div");
         acts.style.display = "flex";
-        acts.style.gap = "8px";
+        acts.style.gap = "6px";
         acts.style.flex = "0 0 auto";
+        acts.style.flexWrap = "wrap";
 
         const isMe = (parseInt(u.id) === MY_UID);
         const isSupreme = String(u.username || "").toLowerCase() === "admin";
 
-        const roleBtn = document.createElement("button");
-        roleBtn.type = "button";
-        roleBtn.className = "btn btnGhost";
-        roleBtn.style.padding = "10px 12px";
-
         const nextRole = (String(u.role).toLowerCase() === "user") ? "admin" : "user";
-        roleBtn.textContent = (nextRole === 'admin') ? 'Admin' : 'user';
-        roleBtn.disabled = isMe || isSupreme;
-        roleBtn.onclick = () => postAdmin("admin_set_role", { uid: u.id, role: nextRole });
+        const roleBtn = iconBtn(
+          nextRole === 'admin' ? '👑' : '👤',
+          nextRole === 'admin' ? 'Imposta admin' : 'Imposta user',
+          "btn btnGhost",
+          () => postAdmin("admin_set_role", { uid: u.id, role: nextRole }),
+          isMe || isSupreme
+        );
 
-        const actBtn = document.createElement("button");
-        actBtn.type = "button";
-        actBtn.className = "btn btnGhost";
-        actBtn.style.padding = "10px 12px";
-        actBtn.textContent = u.is_active ? "Disattiva" : "Attiva";
-        actBtn.disabled = isMe || isSupreme;
-        actBtn.onclick = () => postAdmin("admin_toggle_active", { uid: u.id, active: u.is_active ? 0 : 1 });
+        const actBtn = iconBtn(
+          u.is_active ? '⏸' : '▶',
+          u.is_active ? 'Disattiva' : 'Attiva',
+          "btn btnGhost",
+          () => postAdmin("admin_toggle_active", { uid: u.id, active: u.is_active ? 0 : 1 }),
+          isMe || isSupreme
+        );
 
-        const passBtn = document.createElement("button");
-        passBtn.type = "button";
-        passBtn.className = "btn btnGhost";
-        passBtn.style.padding = "10px 12px";
-        passBtn.textContent = "Password";
-        passBtn.disabled = isMe || isSupreme;
-        passBtn.onclick = () => openAdminPass(u);
+        const passBtn = iconBtn(
+          '🔒',
+          'Cambia password',
+          "btn btnGhost",
+          () => openAdminPass(u),
+          isMe || isSupreme
+        );
 
-        const delBtn = document.createElement("button");
-        delBtn.type = "button";
-        delBtn.className = "btn btnDanger";
-        delBtn.style.padding = "10px 12px";
-        delBtn.textContent = "Elimina";
-        delBtn.disabled = isMe || isSupreme;
-        delBtn.onclick = () => {
-          if (confirm(`Eliminare utente "${u.username}"?`)) {
-            postAdmin("admin_delete_user", { uid: u.id });
-          }
-        };
+        const delBtn = iconBtn(
+          '🗑',
+          'Elimina',
+          "btn btnDanger",
+          () => {
+            if (confirm(T.confirm_delete_user + u.username + '"?')) {
+              postAdmin("admin_delete_user", { uid: u.id });
+            }
+          },
+          isMe || isSupreme
+        );
 
-        const contactsBtn = document.createElement("button");
-        contactsBtn.type = "button";
-        contactsBtn.className = "btn btnPrimary";
-        contactsBtn.style.padding = "10px 12px";
-        contactsBtn.textContent = "Visualizza contatti";
-        contactsBtn.onclick = () => viewUserContacts(u);
+        const contactsBtn = iconBtn(
+          '📋',
+          'Visualizza contatti',
+          "btn btnPrimary",
+          () => viewUserContacts(u),
+          false
+        );
 
         acts.appendChild(contactsBtn);
         acts.appendChild(roleBtn);
@@ -1426,27 +1874,22 @@ $users_select_json = json_encode($users_select, JSON_UNESCAPED_UNICODE | JSON_UN
 
     function viewUserContacts(u){
       if (!u) return;
-      currentUserFilterId = parseInt(u.id);
-      currentUserFilterName = u.username;
-      updateUserFilterChip();
       closeUsersAdmin();
-      currentTab = "all";
-      $("tabAll").classList.add("active");
-      $("tabFav").classList.remove("active");
-      currentQuery = "";
-      const q = $("q");
-      if (q) q.value = "";
-      render();
+      window.location.href = "app.php?view_user_id=" + u.id;
     }
   <?php endif; ?>
 
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
-      if ($("usersSheetWrap")?.style.display === "flex") closeUsersAdmin?.();
-      if ($("adminPassSheetWrap")?.style.display === "flex") closeAdminPass?.();
-      if ($("passSheetWrap")?.style.display === "flex") closePass();
-      if ($("editSheetWrap")?.style.display === "flex") closeEdit();
-      if ($("viewOverlay")?.style.display === "flex") closeView();
+      if ($("profileMenu")?.classList.contains("open")) closeProfileMenu();
+      else if ($("langSheetWrap")?.style.display === "flex") closeLanguage();
+      else if ($("usersSheetWrap")?.style.display === "flex") closeUsersAdmin?.();
+      else if ($("adminPassSheetWrap")?.style.display === "flex") closeAdminPass?.();
+      else if ($("passSheetWrap")?.style.display === "flex") closePass();
+      else if ($("importSIMSheetWrap")?.style.display === "flex") closeImportSIM();
+      else if ($("exportSheetWrap")?.style.display === "flex") closeExport();
+      else if ($("editSheetWrap")?.style.display === "flex") closeEdit();
+      else if ($("viewOverlay")?.style.display === "flex") closeView();
     }
   });
 

@@ -165,13 +165,13 @@ if (!is_dir($upload_dir)) @mkdir($upload_dir, 0777, true);
 
 /** Bootstrap admin (solo prima installazione) */
 $bootstrap_admin_user = "admin";
-$bootstrap_admin_pass = "nome";
+$bootstrap_admin_pass = "lunabella";
 
 /** DB config */
 define('DB_HOST', 'localhost');
 define('DB_NAME', 'rubrica');
 define('DB_USER', 'root');
-define('DB_PASS', 'pass'); // <-- metti la tua password DB
+define('DB_PASS', 'homecasaluna'); // <-- metti la tua password DB
 
 if (!function_exists('str_starts_with')) {
   function str_starts_with(string $haystack, string $needle): bool {
@@ -203,6 +203,38 @@ function db(): PDO {
 }
 
 function h($s) { return htmlspecialchars((string)$s, ENT_QUOTES, 'UTF-8'); }
+
+/* =========================
+   LOCALIZATION (IT, EN, FR, ES)
+========================= */
+$AVAILABLE_LANGS = ['it' => 'Italiano', 'en' => 'English', 'fr' => 'Français', 'es' => 'Español'];
+
+if (isset($_GET['lang']) && isset($AVAILABLE_LANGS[(string)$_GET['lang']])) {
+  $_SESSION['lang'] = (string)$_GET['lang'];
+  $redirect = strtok($_SERVER['REQUEST_URI'], '?');
+  if (isset($_GET['view_user_id']) && (int)$_GET['view_user_id'] > 0) {
+    $redirect .= (strpos($redirect, '?') !== false ? '&' : '?') . 'view_user_id=' . (int)$_GET['view_user_id'];
+  }
+  header("Location: " . $redirect);
+  exit;
+}
+
+$CURRENT_LANG = $_SESSION['lang'] ?? 'it';
+if (!isset($AVAILABLE_LANGS[$CURRENT_LANG])) {
+  $CURRENT_LANG = 'it';
+}
+$_SESSION['lang'] = $CURRENT_LANG;
+
+$LOCALE = [];
+$locale_file = __DIR__ . '/localizable/' . $CURRENT_LANG . '.php';
+if (file_exists($locale_file)) {
+  $LOCALE = require $locale_file;
+}
+
+function t(string $key): string {
+  global $LOCALE;
+  return $LOCALE[$key] ?? $key;
+}
 
 function safe_path_inside_uploads($path, $upload_url) {
   if (!$path) return "";
@@ -468,24 +500,47 @@ function contact_belongs_to_user(string $id, int $uid): bool {
   return (bool)$st->fetchColumn();
 }
 
-function require_contact_access(array $user, string $contact_id): void {
-  if (($user['role'] ?? '') === 'admin') return;
-  if (!contact_belongs_to_user($contact_id, (int)$user['id'])) {
+function require_contact_access(array $user, string $contact_id, ?int $view_user_id = null): void {
+  $uid = (int)$user['id'];
+  $is_admin = ($user['role'] ?? '') === 'admin';
+
+  if ($is_admin) {
+    // Admin: può accedere solo ai propri contatti O ai contatti dell'utente che sta visualizzando
+    if ($view_user_id !== null) {
+      if (!contact_belongs_to_user($contact_id, $view_user_id)) {
+        http_response_code(403);
+        echo "Permesso negato.";
+        exit;
+      }
+    } else {
+      if (!contact_belongs_to_user($contact_id, $uid)) {
+        http_response_code(403);
+        echo "Permesso negato.";
+        exit;
+      }
+    }
+    return;
+  }
+
+  if (!contact_belongs_to_user($contact_id, $uid)) {
     http_response_code(403);
     echo "Permesso negato.";
     exit;
   }
 }
 
-function fetch_contacts(array $user): array {
+/** Restituisce i contatti: per tutti gli utenti (incluso admin) solo i propri; se admin passa view_user_id vede quelli di quel utente */
+function fetch_contacts(array $user, ?int $view_user_id = null): array {
   $pdo = db();
-  if (($user['role'] ?? '') === 'admin') {
-    $rows = $pdo->query("SELECT * FROM contacts ORDER BY preferito DESC, nome ASC")->fetchAll();
-  } else {
-    $st = $pdo->prepare("SELECT * FROM contacts WHERE user_id=? ORDER BY preferito DESC, nome ASC");
-    $st->execute([(int)$user['id']]);
-    $rows = $st->fetchAll();
+  $target_uid = (int)$user['id'];
+
+  if (($user['role'] ?? '') === 'admin' && $view_user_id !== null && $view_user_id > 0) {
+    $target_uid = $view_user_id;
   }
+
+  $st = $pdo->prepare("SELECT * FROM contacts WHERE user_id=? ORDER BY preferito DESC, nome ASC");
+  $st->execute([$target_uid]);
+  $rows = $st->fetchAll();
   foreach ($rows as &$r) $r['preferito'] = (bool)((int)($r['preferito'] ?? 0));
   return $rows ?: [];
 }
