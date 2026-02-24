@@ -337,42 +337,59 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && (string)($_POST['azione'] ?? '') ==
             'nome' => $nome,
             'cognome' => $cognome,
             'telefono' => $tel ?: ' ',
-            'email' => $email,
+            'email' => '',
           ];
         }
       }
     } elseif (substr($name, -4) === '.csv' || strpos($content, ',') !== false || strpos($content, ';') !== false) {
-      // Parse CSV (supporta virgola e punto e virgola)
+      // Parse CSV (supporta virgola e punto e virgola) - formato Google Contacts
       $lines = preg_split('/\r?\n/', $content);
       if (count($lines) < 2) $lines = [];
       $delim = (substr_count($lines[0] ?? '', ';') >= substr_count($lines[0] ?? '', ',')) ? ';' : ',';
       $header = array_map('trim', str_getcsv($lines[0] ?? '', $delim, '"'));
       $header_lower = array_map('strtolower', $header);
-      $idx_name = $idx_nome = $idx_cognome = $idx_tel = $idx_phone = $idx_email = -1;
+      $idx_first = $idx_middle = $idx_last = $idx_name = $idx_nome = $idx_cognome = $idx_tel = $idx_phone = $idx_phone_value = -1;
       foreach ($header_lower as $i => $h) {
-        if (in_array($h, ['name', 'nome', 'display name', 'display name 1'], true)) $idx_name = $i;
-        elseif (in_array($h, ['first name', 'first', 'given'], true)) $idx_nome = $i;
-        elseif (in_array($h, ['last name', 'last', 'family', 'cognome'], true)) $idx_cognome = $i;
+        $h = trim($h);
+        if (in_array($h, ['first name', 'first', 'given'], true)) $idx_first = $i;
+        elseif (in_array($h, ['middle name', 'middle'], true)) $idx_middle = $i;
+        elseif (in_array($h, ['last name', 'last', 'family', 'cognome'], true)) $idx_last = $i;
+        elseif (in_array($h, ['name', 'nome', 'display name', 'display name 1'], true)) $idx_name = $i;
         elseif (in_array($h, ['tel', 'telefono', 'phone', 'mobile', 'cell'], true)) { $idx_tel = $i; if ($idx_phone < 0) $idx_phone = $i; }
-        elseif (in_array($h, ['email', 'e-mail', 'mail'], true)) $idx_email = $i;
+        elseif ($h === 'phone 1 - value' || strpos($h, 'phone') !== false && strpos($h, 'value') !== false) $idx_phone_value = $i;
       }
-      if ($idx_tel < 0) { foreach ($header_lower as $i => $h) { if (strpos($h, 'tel') !== false || strpos($h, 'phone') !== false) { $idx_tel = $i; break; } } }
-      if ($idx_email < 0) { foreach ($header_lower as $i => $h) { if (strpos($h, 'email') !== false || strpos($h, 'mail') !== false) { $idx_email = $i; break; } } }
+      if ($idx_tel < 0 && $idx_phone_value < 0) {
+        foreach ($header_lower as $i => $h) {
+          if (strpos($h, 'phone') !== false || strpos($h, 'tel') !== false) {
+            if (strpos($h, 'value') !== false) $idx_phone_value = $i;
+            else { $idx_tel = $i; if ($idx_phone < 0) $idx_phone = $i; }
+            break;
+          }
+        }
+      }
+      if ($idx_phone_value >= 0) $idx_tel = $idx_phone_value;
+      if ($idx_tel < 0 && $idx_phone >= 0) $idx_tel = $idx_phone;
       for ($i = 1; $i < count($lines); $i++) {
         $row = str_getcsv($lines[$i], $delim, '"');
+        $first = trim($row[$idx_first] ?? '');
+        $middle = trim($row[$idx_middle] ?? '');
+        $last = trim($row[$idx_last] ?? '');
         $nome = trim($row[$idx_name] ?? $row[$idx_nome] ?? '');
         $cognome = trim($row[$idx_cognome] ?? '');
-        $tel = preg_replace('/[^\d+]/', '', $row[$idx_tel] ?? $row[$idx_phone] ?? '');
-        $email = trim($row[$idx_email] ?? '');
+        $tel_raw = trim($row[$idx_tel] ?? $row[$idx_phone] ?? '');
+        $tel = preg_replace('/[^\d+]/', '', $tel_raw);
+        if ($idx_first >= 0 || $idx_last >= 0) {
+          $nome = trim($first . ' ' . $middle) ?: $nome;
+          $cognome = $last ?: $cognome;
+        }
         if ($nome === '' && $cognome === '') $nome = trim($row[0] ?? '');
-        if ($tel === '' && isset($row[1])) $tel = preg_replace('/[^\d+]/', '', $row[1]);
-        if ($email === '' && isset($row[2])) $email = trim($row[2]);
-        if ($tel !== '' || $nome !== '' || $email !== '') {
+        if ($tel === '' && isset($row[1])) $tel = preg_replace('/[^\d+]/', '', (string)$row[1]);
+        if ($tel !== '' || $nome !== '' || $cognome !== '') {
           $contacts_to_import[] = [
             'nome' => $nome ?: t('no_name'),
             'cognome' => $cognome,
             'telefono' => $tel ?: ' ',
-            'email' => $email,
+            'email' => '',
           ];
         }
       }
@@ -404,6 +421,41 @@ if ($_SERVER["REQUEST_METHOD"] === "POST" && (string)($_POST['azione'] ?? '') ==
     $_SESSION['toast_err'] = $err_msg;
   } elseif ($imported > 0) {
     $_SESSION['toast_msg'] = str_replace('{n}', (string)$imported, t('import_sim_success'));
+  }
+  header("Location: " . $redirect);
+  exit();
+}
+
+/* =========================
+   DELETE MULTIPLE CONTACTS
+========================= */
+if ($_SERVER["REQUEST_METHOD"] === "POST" && (string)($_POST['azione'] ?? '') === 'delete_multiple') {
+  if (!hash_equals($_SESSION['csrf'] ?? '', (string)($_POST['csrf'] ?? ''))) {
+    $_SESSION['toast_err'] = t('error_csrf_req');
+    header("Location: app.php" . ($view_user_id ? "?view_user_id=" . $view_user_id : ""));
+    exit();
+  }
+  if (!can_manage_contacts($user)) {
+    $_SESSION['toast_err'] = t('error_csrf_req');
+    header("Location: app.php" . ($view_user_id ? "?view_user_id=" . $view_user_id : ""));
+    exit();
+  }
+
+  $ids = isset($_POST['ids']) && is_array($_POST['ids']) ? $_POST['ids'] : [];
+  $deleted = 0;
+  foreach ($ids as $id) {
+    $id = trim((string)$id);
+    if ($id === '') continue;
+    require_contact_access($user, $id, $view_user_id);
+    $avatar = delete_contact($id);
+    $av = safe_path_inside_uploads($avatar ?? "", $upload_url);
+    if (!empty($av) && file_exists(__DIR__ . "/" . $av)) @unlink(__DIR__ . "/" . $av);
+    $deleted++;
+  }
+
+  $redirect = $view_user_id ? "app.php?view_user_id=" . $view_user_id : "app.php";
+  if ($deleted > 0) {
+    $_SESSION['toast_msg'] = str_replace('{n}', (string)$deleted, t('delete_multiple_success'));
   }
   header("Location: " . $redirect);
   exit();
@@ -884,6 +936,32 @@ $users_json = json_encode($users, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHE
     }
     .fab:active{ transform: scale(0.98); }
     .fab.hidden{ opacity: 0; pointer-events: none; transform: scale(0.8); }
+    .selectionBar{
+      position: fixed;
+      bottom: max(24px, env(safe-area-inset-bottom));
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 95;
+      min-width: min(400px, 90vw);
+      padding: 14px 18px;
+      border-radius: 22px;
+      border: 1px solid rgba(255,255,255,.18);
+      background: rgba(12,20,40,.95);
+      backdrop-filter: blur(20px);
+      box-shadow: 0 24px 60px rgba(0,0,0,.5);
+    }
+    .selectionBarInner{
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .selectionCount{ font-weight: 780; font-size: 15px; color: var(--text); }
+    .itemSelect{ width: 24px; height: 24px; flex-shrink: 0; cursor: pointer; accent-color: rgba(125,211,252,.9); }
+    .item.selectMode{ cursor: default; }
+    .item.selectMode:hover{ transform: none; }
+    .item.selectMode .meta{ cursor: pointer; }
+    .btnGhost.active{ background: rgba(125,211,252,.2); border-color: rgba(125,211,252,.4); color: var(--text); }
   </style>
 </head>
 <body>
@@ -946,6 +1024,7 @@ $users_json = json_encode($users, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHE
           <button class="tab active" id="tabAll" onclick="setTab('all')" type="button" data-t="tab_all"><?= t('tab_all') ?></button>
           <button class="tab" id="tabFav" onclick="setTab('fav')" type="button" data-t="tab_favorites"><?= t('tab_favorites') ?></button>
         </div>
+        <button class="btn btnGhost" id="btnSelectMode" type="button" onclick="toggleSelectMode()" style="padding:10px 12px;font-size:13px;"><?= t('btn_select_contacts') ?></button>
       </div>
     </div>
   </div>
@@ -961,6 +1040,19 @@ $users_json = json_encode($users, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHE
     <div id="list" class="list"></div>
     <div id="empty" class="empty" style="display:none;">
       <?= t('empty_contacts') ?>
+    </div>
+  </div>
+
+  <!-- SELECTION BAR (multi-delete) -->
+  <div id="selectionBar" class="selectionBar" style="display:none;">
+    <div class="selectionBarInner">
+      <span id="selectionCount" class="selectionCount">0</span>
+      <form id="formDeleteMultiple" method="POST" action="app.php<?= $view_user_id ? '?view_user_id='.$view_user_id : '' ?>" style="display:flex;gap:10px;align-items:center;">
+        <input type="hidden" name="azione" value="delete_multiple">
+        <input type="hidden" name="csrf" value="<?= h($CSRF) ?>">
+        <button type="button" class="btn btnGhost" onclick="toggleSelectMode()"><?= t('btn_cancel_selection') ?></button>
+        <button type="submit" class="btn btnDanger" id="btnDeleteSelected"><?= t('btn_delete_selected') ?></button>
+      </form>
     </div>
   </div>
 
@@ -1293,11 +1385,18 @@ $users_json = json_encode($users, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHE
     'empty_users' => t('empty_users'),
     'status_active' => t('status_active'),
     'status_inactive' => t('status_inactive'),
+    'btn_select_contacts' => t('btn_select_contacts'),
+    'btn_cancel_selection' => t('btn_cancel_selection'),
+    'btn_delete_selected' => t('btn_delete_selected'),
+    'confirm_delete_selected' => t('confirm_delete_selected'),
+    'selected_count' => t('selected_count'),
   ], JSON_UNESCAPED_UNICODE) ?>;
 
   let currentTab = "all";
   let currentQuery = "";
   let viewing = null;
+  let selectionMode = false;
+  let selectedIds = new Set();
 
   const $ = (id) => document.getElementById(id);
   function normalize(s){ return (s||"").toString().toLowerCase().trim(); }
@@ -1368,8 +1467,24 @@ $users_json = json_encode($users, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHE
 
       for (const c of s.items) {
         const item = document.createElement("div");
-        item.className = "item";
-        item.onclick = () => openView(c);
+        item.className = "item" + (selectionMode ? " selectMode" : "");
+        if (selectionMode) {
+          item.onclick = (e) => {
+            if (e.target.type === "checkbox") return;
+            toggleSelectContact(c.id);
+          };
+        } else {
+          item.onclick = () => openView(c);
+        }
+
+        if (selectionMode) {
+          const cb = document.createElement("input");
+          cb.type = "checkbox";
+          cb.className = "itemSelect";
+          cb.checked = selectedIds.has(c.id);
+          cb.onclick = (e) => { e.stopPropagation(); toggleSelectContact(c.id); };
+          item.appendChild(cb);
+        }
 
         const av = document.createElement("div");
         av.className = "avatar";
@@ -1447,9 +1562,50 @@ $users_json = json_encode($users, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHE
     render();
   }
 
+  function toggleSelectMode(){
+    selectionMode = !selectionMode;
+    if (!selectionMode) selectedIds.clear();
+    $("btnSelectMode").textContent = selectionMode ? T.btn_cancel_selection : T.btn_select_contacts;
+    $("btnSelectMode").classList.toggle("active", selectionMode);
+    $("selectionBar").style.display = selectionMode ? "block" : "none";
+    $("fabAdd")?.classList.toggle("hidden", selectionMode);
+    updateSelectionCount();
+    render();
+  }
+
+  function toggleSelectContact(id){
+    if (selectedIds.has(id)) selectedIds.delete(id);
+    else selectedIds.add(id);
+    updateSelectionCount();
+    render();
+  }
+
+  function updateSelectionCount(){
+    const n = selectedIds.size;
+    $("selectionCount").textContent = (T.selected_count || "{n} selezionati").replace("{n}", n);
+    $("btnDeleteSelected").disabled = n === 0;
+  }
+
   $("q").addEventListener("input", (e) => {
     currentQuery = normalize(e.target.value);
     render();
+  });
+
+  $("formDeleteMultiple")?.addEventListener("submit", (e) => {
+    if (selectedIds.size === 0) { e.preventDefault(); return; }
+    if (!confirm(T.confirm_delete_selected.replace("{n}", selectedIds.size))) {
+      e.preventDefault();
+      return;
+    }
+    const form = e.target;
+    form.querySelectorAll("input[name='ids[]']").forEach(el => el.remove());
+    for (const id of selectedIds) {
+      const inp = document.createElement("input");
+      inp.type = "hidden";
+      inp.name = "ids[]";
+      inp.value = id;
+      form.appendChild(inp);
+    }
   });
 
   function openView(c){
@@ -1619,20 +1775,21 @@ $users_json = json_encode($users, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHE
       downloadBlob(vcf, filename, "text/vcard");
     } else {
       const BOM = "\uFEFF";
-      let csv = BOM + "Nome;Cognome;Telefono;Email\r\n";
+      const header = "First Name,Middle Name,Last Name,Phonetic First Name,Phonetic Middle Name,Phonetic Last Name,Name Prefix,Name Suffix,Nickname,File As,Organization Name,Organization Title,Organization Department,Birthday,Notes,Photo,Labels,Phone 1 - Label,Phone 1 - Value";
+      let csv = BOM + header + "\r\n";
       for (const c of list) {
-        const nome = escapeCsv(c.nome || "");
-        const cognome = escapeCsv(c.cognome || "");
-        const tel = escapeCsv(c.telefono || "");
-        const email = escapeCsv(c.email || "");
-        csv += nome + ";" + cognome + ";" + tel + ";" + email + "\r\n";
+        const firstName = escapeCsv((c.nome || "").trim());
+        const middleName = "";
+        const lastName = escapeCsv((c.cognome || "").trim());
+        const tel = escapeCsv((c.telefono || "").trim());
+        csv += firstName + "," + middleName + "," + lastName + ",,,,,,,,,,,,,,,* myContacts,Mobile," + tel + "\r\n";
       }
       downloadBlob(csv, filename, "text/csv;charset=utf-8");
     }
   }
   function escapeCsv(s){
     const str = String(s ?? "");
-    if (str.includes(";") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
+    if (str.includes(",") || str.includes(";") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
       return '"' + str.replace(/"/g, '""') + '"';
     }
     return str;
@@ -1881,7 +2038,8 @@ $users_json = json_encode($users, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHE
 
   window.addEventListener("keydown", (e) => {
     if (e.key === "Escape") {
-      if ($("profileMenu")?.classList.contains("open")) closeProfileMenu();
+      if (selectionMode) toggleSelectMode();
+      else if ($("profileMenu")?.classList.contains("open")) closeProfileMenu();
       else if ($("langSheetWrap")?.style.display === "flex") closeLanguage();
       else if ($("usersSheetWrap")?.style.display === "flex") closeUsersAdmin?.();
       else if ($("adminPassSheetWrap")?.style.display === "flex") closeAdminPass?.();
