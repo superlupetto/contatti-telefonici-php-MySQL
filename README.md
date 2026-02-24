@@ -1,7 +1,9 @@
 # 📌 User Management Panel
 
 Sistema di gestione utenti sviluppato in PHP + MySQL, con pannello Admin e gestione ruoli.
+
 unzip localizable.zip
+
 ## 🚀 Funzionalità
 
 - Registrazione
